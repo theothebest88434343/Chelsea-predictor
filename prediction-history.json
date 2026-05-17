@@ -1669,7 +1669,11 @@
         }
       },
       "trackedAt": "2026-05-14T23:40:57.890Z",
-      "result": null
+      "result": {
+        "homeGoals": 2,
+        "awayGoals": 2,
+        "settledAt": "2026-05-17T16:54:42.858Z"
+      }
     },
     {
       "fixtureId": 370,
@@ -1797,7 +1801,11 @@
         }
       },
       "trackedAt": "2026-05-14T23:40:57.891Z",
-      "result": null
+      "result": {
+        "homeGoals": 1,
+        "awayGoals": 1,
+        "settledAt": "2026-05-17T16:54:42.859Z"
+      }
     },
     {
       "fixtureId": 369,
@@ -2309,7 +2317,11 @@
         }
       },
       "trackedAt": "2026-05-14T23:40:57.943Z",
-      "result": null
+      "result": {
+        "homeGoals": 3,
+        "awayGoals": 2,
+        "settledAt": "2026-05-17T16:54:42.859Z"
+      }
     },
     {
       "fixtureId": 362,
@@ -2569,7 +2581,11 @@
         }
       },
       "trackedAt": "2026-05-14T23:40:57.968Z",
-      "result": null
+      "result": {
+        "homeGoals": 1,
+        "awayGoals": 3,
+        "settledAt": "2026-05-17T16:54:42.859Z"
+      }
     },
     {
       "fixtureId": 367,
@@ -2697,7 +2713,11 @@
         }
       },
       "trackedAt": "2026-05-14T23:40:57.971Z",
-      "result": null
+      "result": {
+        "homeGoals": 1,
+        "awayGoals": 0,
+        "settledAt": "2026-05-17T16:54:42.859Z"
+      }
     },
     {
       "fixtureId": 354,

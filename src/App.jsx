@@ -6,6 +6,7 @@ import Fixtures from './pages/Fixtures';
 import League from './pages/League';
 import Stats from './pages/Stats';
 import Round from './pages/Round';
+import WorldCup from './pages/WorldCup';
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/league"   element={<League />} />
           <Route path="/stats"    element={<Stats />} />
           <Route path="/round"    element={<Round />} />
+          <Route path="/worldcup" element={<WorldCup />} />
         </Routes>
       </main>
 

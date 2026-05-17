@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --input-type=module)",
+      "Bash(node -e ' *)",
+      "Bash(node --check server.js)",
+      "Bash(npx --yes vite build --mode development)",
+      "Bash(node --check \"/Users/theosteinstrasser/Documents/Vs Code/chelsea Pred/server.js\")",
+      "Bash(npx vite *)"
+    ]
+  }
+}

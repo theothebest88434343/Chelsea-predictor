@@ -1185,19 +1185,40 @@ app.get('/api/prematch-report', async (req, res) => {
         ].filter(Boolean).join('\n');
       };
 
-      const systemPrompt = `You are a football analyst specialising in Chelsea FC. Write engaging pre-match analysis for cup finals.
-Use **bold** for key stats and player names. Keep it under 450 words.
-CRITICAL: Do NOT produce score predictions, scorelines, or win/draw/loss percentages. Your job is purely narrative.`;
+      // Build roster lists for cup fixture too
+      function cupSquadRoster(teamData, elements) {
+        if (!teamData) return 'Squad data unavailable';
+        const players = (elements ?? [])
+          .filter(pl => pl.team === teamData.id && pl.element_type !== 1)
+          .sort((a, b) => b.minutes - a.minutes)
+          .slice(0, 11);
+        return players.map(pl => {
+          let s = `${pl.first_name} ${pl.second_name}`;
+          if (pl.goals_scored > 0) s += ` (${pl.goals_scored}G)`;
+          if (pl.status === 'i') s += ' ⚠️ INJURED';
+          if (pl.status === 'd') s += ' ⚠️ DOUBTFUL';
+          return s;
+        }).join(', ');
+      }
 
-      const userPrompt = `Write a pre-match analysis for the **${competition} at Wembley**: ${homeName} vs ${awayName}.
+      const homeRoster = cupSquadRoster(homeTeamData, elements);
+      const awayRoster = cupSquadRoster(awayTeamData, elements);
+
+      const systemPrompt = `You are an elite football analyst specialising in Chelsea FC. Write sharp, engaging pre-match analysis for cup finals — the quality of The Athletic.
+Use **bold** for player names and key stats. 3 paragraphs: form & stakes → key tactical battle → ones to watch & what each side needs. Under 420 words.
+ABSOLUTE RULES: (1) ONLY name players from the roster lists provided — never guess at squad members. (2) No score predictions or percentages. (3) No filler phrases. Be specific.`;
+
+      const userPrompt = `Pre-match report: **${competition}** — ${homeName} vs ${awayName}.
 
 ${teamBlock(homeName, homeStats)}
+${homeName} current players (ONLY name from this list): ${homeRoster}
 
 ${teamBlock(awayName, awayStats)}
+${awayName} current players (ONLY name from this list): ${awayRoster}
 
 ${h2hText}
 
-Cover: recent form of both sides, key tactical battles, players to watch on each team, how the cup final one-off context differs from a league game, and what each side needs to do to win. If any injury doubts are listed, factor them in.`;
+Write the report now. No headline needed.`;
 
       const report = await groqChat([
         { role: 'system', content: systemPrompt },
@@ -1218,23 +1239,75 @@ Cover: recent form of both sides, key tactical battles, players to watch on each
     const awayTeam  = teams.find(t => t.id === fix.team_a);
 
     const p = pred.prediction;
-    const systemPrompt = `You are a Premier League tactical analyst specialising in Chelsea FC.
-Write concise, data-driven pre-match narrative reports. Use **bold** for key stats.
-Never invent stats not provided. Keep it under 400 words.
-CRITICAL: Do NOT produce your own score predictions, scorelines, or win/draw/loss percentages.
-All numerical probabilities and expected scores are calculated by the Monte Carlo simulation and provided to you.
-Your sole job is to write narrative analysis explaining WHY the model sees those numbers — tactics, form, injuries, H2H.`;
 
-    const userPrompt = `Write a pre-match narrative for ${homeTeam.name} vs ${awayTeam.name}.
+    // Build current squad lists from live FPL data so the LLM can't hallucinate
+    // transferred-away players (e.g. Mason Mount).
+    const { elements: allPlayers } = bs;
 
-Monte Carlo outputs (do NOT change or re-derive):
-  Home win: ${(p.homeWin * 100).toFixed(1)}% | Draw: ${(p.draw * 100).toFixed(1)}% | Away win: ${(p.awayWin * 100).toFixed(1)}%
-  Most likely score: ${p.predictedScore} (${(p.scoreProbability * 100).toFixed(1)}%)
-  xG — ${homeTeam.name}: ${p.lambdas.home.toFixed(2)} | ${awayTeam.name}: ${p.lambdas.away.toFixed(2)}
-  ${pred.odds ? `Odds: ${pred.odds.home} / ${pred.odds.draw} / ${pred.odds.away}` : ''}
+    function squadSummary(teamId, teamName) {
+      const players = allPlayers.filter(pl => pl.team === teamId);
 
-Write 3–4 paragraphs: current form, key tactical battles, players to watch, and what would need to go wrong for the favourite.
-Do NOT suggest alternative scores or probabilities.`;
+      // Key contributors: sort by minutes played this season, take top 11
+      const outfield = players
+        .filter(pl => pl.element_type !== 1) // exclude keepers from name-drop pool
+        .sort((a, b) => b.minutes - a.minutes)
+        .slice(0, 11);
+
+      // Compose a readable line per player
+      const lines = outfield.map(pl => {
+        const parts = [`${pl.first_name} ${pl.second_name} (${pl.minutes} mins`];
+        if (pl.goals_scored > 0)  parts[0] += `, ${pl.goals_scored}G`;
+        if (pl.assists > 0)       parts[0] += `, ${pl.assists}A`;
+        parts[0] += ')';
+        if (pl.status === 'i')    parts[0] += ' ⚠️ INJURED';
+        if (pl.status === 'd')    parts[0] += ' ⚠️ DOUBTFUL';
+        return parts[0];
+      });
+
+      // Also surface top scorer separately in case they have low minutes
+      const topScorer = [...players].sort((a, b) => b.goals_scored - a.goals_scored)[0];
+
+      return {
+        roster: lines.join('\n  '),
+        topScorerName: topScorer ? `${topScorer.first_name} ${topScorer.second_name}` : null,
+        topScorerGoals: topScorer?.goals_scored ?? 0,
+        injuries: players
+          .filter(pl => (pl.status === 'i' || pl.status === 'd') && (pl.chance_of_playing_next_round ?? 100) < 75)
+          .map(pl => `${pl.first_name} ${pl.second_name}`)
+          .slice(0, 4),
+      };
+    }
+
+    const homeSquad = squadSummary(fix.team_h, homeTeam.name);
+    const awaySquad = squadSummary(fix.team_a, awayTeam.name);
+
+    const systemPrompt = `You are an elite Premier League tactical analyst specialising in Chelsea FC.
+Write sharp, insightful, punchy pre-match reports — the kind you'd find on The Athletic.
+Use **bold** for player names and key stats. Structure: 3 focused paragraphs (form & context → key tactical battle → ones to watch & verdict). Under 380 words.
+
+ABSOLUTE RULES — failure on any of these makes the report useless:
+1. NEVER name a player who is not on the roster list provided. If you don't see their name, they are NOT at the club. Do not guess.
+2. Do NOT produce your own score predictions, scorelines, or win/draw/loss percentages — those are already calculated by the model.
+3. Do NOT use filler phrases like "in conclusion", "it promises to be", "a fascinating encounter", or "all to play for".
+4. Be specific. Reference actual stats from the data provided — minutes, goals, assists, form letters.`;
+
+    const userPrompt = `Pre-match report: **${homeTeam.name} vs ${awayTeam.name}**
+
+── MODEL OUTPUTS (reference these, do not re-derive) ──
+Home win ${(p.homeWin * 100).toFixed(1)}% · Draw ${(p.draw * 100).toFixed(1)}% · Away win ${(p.awayWin * 100).toFixed(1)}%
+Most likely score: ${p.predictedScore} (${(p.scoreProbability * 100).toFixed(1)}% probability)
+xG model: ${homeTeam.name} ${p.lambdas.home.toFixed(2)} | ${awayTeam.name} ${p.lambdas.away.toFixed(2)}
+${pred.odds ? `Market odds: ${pred.odds.home} / ${pred.odds.draw} / ${pred.odds.away}` : ''}
+
+── ${homeTeam.name.toUpperCase()} CURRENT SQUAD (ONLY name players from this list) ──
+  ${homeSquad.roster}
+${homeSquad.injuries.length ? `Injury concerns: ${homeSquad.injuries.join(', ')}` : 'No major injury concerns'}
+
+── ${awayTeam.name.toUpperCase()} CURRENT SQUAD (ONLY name players from this list) ──
+  ${awaySquad.roster}
+${awaySquad.injuries.length ? `Injury concerns: ${awaySquad.injuries.join(', ')}` : 'No major injury concerns'}
+
+Write the report now. Paragraph 1: form and context. Paragraph 2: the key tactical battle. Paragraph 3: two players to watch (one from each side) and a concise verdict referencing the model's numbers. Do not add a headline.`;
 
     const report = await groqChat([
       { role: 'system', content: systemPrompt },
@@ -1280,13 +1353,32 @@ app.get('/api/opponent-analysis', async (req, res) => {
       return tg > og ? 'W' : tg < og ? 'L' : 'D';
     }).join('');
 
-    const systemPrompt = `You are a Premier League scout. Write a concise opponent analysis in under 300 words. Use markdown. Be specific and analytical.
-IMPORTANT: Do NOT suggest match scores, scorelines, win probabilities, or percentage predictions of any kind. Focus purely on qualitative tactical and form analysis.`;
-    const userPrompt   = `Analyse ${team.name} as Chelsea's next opponent.
+    // Build full roster so the LLM cannot hallucinate stale/transferred players
+    const oppRoster = (elements ?? [])
+      .filter(pl => pl.team === teamId && pl.element_type !== 1)
+      .sort((a, b) => b.minutes - a.minutes)
+      .slice(0, 11)
+      .map(pl => {
+        let s = `${pl.first_name} ${pl.second_name}`;
+        if (pl.goals_scored > 0) s += ` (${pl.goals_scored}G)`;
+        if (pl.assists > 0) s += ` (${pl.assists}A)`;
+        if (pl.status === 'i') s += ' ⚠️ INJURED';
+        if (pl.status === 'd') s += ' ⚠️ DOUBTFUL';
+        return s;
+      }).join(', ');
+
+    const systemPrompt = `You are an elite Premier League scout writing for Chelsea's coaching staff. Be sharp, specific, and analytical — no fluff.
+Use **bold** for key names and stats. Under 280 words.
+ABSOLUTE RULE: ONLY name players from the roster list provided. Never invent or recall players who may have left the club. No scores, probabilities, or scorelines.`;
+    const userPrompt   = `Scout report: ${team.name} as Chelsea's upcoming opponent.
 Last 5 form: ${formStr}
-Top scorer: ${topScorer?.web_name ?? 'Unknown'} (${topScorer?.goals_scored ?? 0} goals)
-Injuries: ${injuries.map(p => p.web_name).join(', ') || 'None reported'}
-Cover: their attacking threats, defensive weaknesses Chelsea can exploit, pressing style, set-piece danger, and the key tactical battle to watch. No scores or probabilities.`;
+Top scorer: ${topScorer ? `${topScorer.first_name} ${topScorer.second_name}` : 'Unknown'} (${topScorer?.goals_scored ?? 0} goals, ${topScorer?.assists ?? 0} assists)
+Confirmed injuries/doubts: ${injuries.map(p => `${p.first_name} ${p.second_name}`).join(', ') || 'None reported'}
+
+Current squad (ONLY name players from this list):
+${oppRoster}
+
+Cover in 3 tight paragraphs: (1) their attacking threat and key danger man, (2) defensive weaknesses Chelsea can exploit, (3) set-piece danger, pressing triggers, and the one tactical battle that will decide the game.`;
 
     const analysis = await groqChat([
       { role: 'system', content: systemPrompt },
@@ -2004,6 +2096,734 @@ async function backfillPendingResults() {
   }
 }
 
+// ─── World Cup 2026 ───────────────────────────────────────────────────────────
+
+// FIFA ranking strength points (approximate, used for Poisson lambdas)
+const FIFA_STRENGTH = {
+  Argentina: 1870, France: 1854, England: 1818, Brazil: 1794, Spain: 1787,
+  Portugal: 1764, Netherlands: 1752, Belgium: 1745, Germany: 1743, Italy: 1726,
+  Croatia: 1716, Morocco: 1712, USA: 1692, 'United States': 1692, Mexico: 1680,
+  Colombia: 1678, Uruguay: 1676, Senegal: 1672, Canada: 1660, Japan: 1659,
+  Ecuador: 1658, Switzerland: 1652, Denmark: 1649, Australia: 1645, Poland: 1644,
+  'South Korea': 1642, Iran: 1640, Peru: 1632, Serbia: 1630, Hungary: 1622,
+  Turkey: 1618, Panama: 1608, 'Costa Rica': 1606, Ghana: 1604, Cameroon: 1602,
+  'Saudi Arabia': 1595, Nigeria: 1590, Honduras: 1588, Algeria: 1580,
+  'South Africa': 1575, Jamaica: 1568, Paraguay: 1562, Slovakia: 1555,
+  Slovenia: 1548, Ukraine: 1540, Romania: 1534, Egypt: 1530, Mali: 1515,
+  Bolivia: 1508, 'New Zealand': 1490, 'DR Congo': 1485, Venezuela: 1478,
+  Kenya: 1465, Uzbekistan: 1460, Uganda: 1445, Cuba: 1420,
+  'Trinidad & Tobago': 1415, Indonesia: 1400, Iraq: 1560, Qatar: 1550,
+};
+
+function wcStrength(name) {
+  if (FIFA_STRENGTH[name]) return FIFA_STRENGTH[name];
+  const key = Object.keys(FIFA_STRENGTH).find(k =>
+    k.toLowerCase() === name.toLowerCase() ||
+    name.toLowerCase().includes(k.toLowerCase()) ||
+    k.toLowerCase().includes(name.toLowerCase())
+  );
+  return key ? FIFA_STRENGTH[key] : 1500;
+}
+
+// Poisson prediction for neutral-venue international football
+function wcPoisson(homeTeam, awayTeam, simCount = 50000) {
+  const BASE_LAMBDA = 1.30;
+  const hStr = wcStrength(homeTeam);
+  const aStr = wcStrength(awayTeam);
+  const diff = (hStr - aStr) / 400;
+  const lambdaH = Math.max(0.3, BASE_LAMBDA * Math.exp( diff * 1.1));
+  const lambdaA = Math.max(0.3, BASE_LAMBDA * Math.exp(-diff * 1.1));
+
+  function poisson(lambda) {
+    let L = Math.exp(-lambda), k = 0, p = 1;
+    do { k++; p *= Math.random(); } while (p > L);
+    return k - 1;
+  }
+
+  let hWins = 0, aWins = 0, draws = 0;
+  const scores = {};
+  for (let i = 0; i < simCount; i++) {
+    const h = poisson(lambdaH);
+    const a = poisson(lambdaA);
+    const key = `${h}-${a}`;
+    scores[key] = (scores[key] ?? 0) + 1;
+    if (h > a) hWins++; else if (h < a) aWins++; else draws++;
+  }
+
+  const topScore = Object.entries(scores).sort((a, b) => b[1] - a[1])[0][0];
+  return {
+    homeWin:        hWins / simCount,
+    draw:           draws / simCount,
+    awayWin:        aWins / simCount,
+    lambdaHome:     parseFloat(lambdaH.toFixed(2)),
+    lambdaAway:     parseFloat(lambdaA.toFixed(2)),
+    predictedScore: topScore,
+  };
+}
+
+// Hardcoded 2026 group draw (confirmed December 2025)
+const WC_GROUPS = {
+  A: ['USA',       'Panama',      'Bolivia',       'South Africa'],
+  B: ['Mexico',    'South Korea', 'Cuba',          'Jamaica'],
+  C: ['Canada',    'Uruguay',     'Mali',          'Uzbekistan'],
+  D: ['Spain',     'Japan',       'Kenya',         'Trinidad & Tobago'],
+  E: ['Germany',   'Colombia',    'Ecuador',       'Indonesia'],
+  F: ['Portugal',  'Argentina',   'Algeria',       'New Zealand'],
+  G: ['France',    'Belgium',     'Brazil',        'Honduras'],
+  H: ['England',   'Netherlands', 'Senegal',       'Ukraine'],
+  I: ['Morocco',   'Croatia',     'Denmark',       'Nigeria'],
+  J: ['Italy',     'Australia',   'Ghana',         'DR Congo'],
+  K: ['Iran',      'Switzerland', 'Venezuela',     'Cameroon'],
+  L: ['Serbia',    'Turkey',      'Saudi Arabia',  'Uganda'],
+};
+
+// ESPN undocumented JSON endpoints — no key required
+const ESPN_SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
+const ESPN_STANDINGS  = 'https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings';
+
+async function fetchESPN(url, cacheKey) {
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+  const res = await withRetry(
+    () => axios.get(url, {
+      timeout: 10000,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    }),
+    { label: `ESPN ${cacheKey}` }
+  );
+  setCache(cacheKey, res.data, 5 * 60 * 1000);
+  return res.data;
+}
+
+// Parse ESPN scoreboard events into a normalised fixture list
+function parseESPNFixtures(data) {
+  const events = data?.events ?? [];
+  return events.map(ev => {
+    const comp       = ev.competitions?.[0] ?? {};
+    const status     = comp.status ?? {};
+    const stateStr   = status.type?.state ?? 'pre';        // 'pre' | 'in' | 'post'
+    const detail     = status.type?.shortDetail ?? 'NS';   // 'FT', 'HT', '45+2', etc.
+    const home       = comp.competitors?.find(c => c.homeAway === 'home');
+    const away       = comp.competitors?.find(c => c.homeAway === 'away');
+    const round      = comp.groups?.name ?? ev.season?.slug ?? '';
+
+    return {
+      id:       ev.id,
+      date:     comp.date ?? ev.date,
+      round,
+      status:   stateStr,
+      detail,
+      teams: {
+        home: { name: home?.team?.displayName ?? home?.team?.name ?? '?', id: home?.team?.id },
+        away: { name: away?.team?.displayName ?? away?.team?.name ?? '?', id: away?.team?.id },
+      },
+      goals: {
+        home: stateStr === 'post' ? Number(home?.score ?? 0) : null,
+        away: stateStr === 'post' ? Number(away?.score ?? 0) : null,
+      },
+      _statusShort: stateStr === 'post' ? 'FT' : stateStr === 'in' ? 'LIVE' : 'NS',
+    };
+  });
+}
+
+// Parse ESPN standings into group rows
+function parseESPNStandings(data) {
+  const groups = {};
+  const entries = data?.standings?.entries ?? data?.children?.flatMap(g =>
+    (g.standings?.entries ?? []).map(e => ({ ...e, _groupName: g.name ?? g.abbreviation }))
+  ) ?? [];
+
+  for (const entry of entries) {
+    const grpName = entry._groupName ?? entry.group?.name ?? 'Unknown';
+    // Extract letter: "Group A" → "A"
+    const letter = grpName.replace(/^group\s*/i, '').trim();
+    if (!letter) continue;
+
+    const stat = name => entry.stats?.find(s => s.name === name)?.value ?? 0;
+
+    groups[letter] = groups[letter] ?? [];
+    groups[letter].push({
+      team:   entry.team?.displayName ?? entry.team?.name ?? '?',
+      teamId: entry.team?.id,
+      played: stat('gamesPlayed'),
+      won:    stat('wins'),
+      drawn:  stat('ties'),
+      lost:   stat('losses'),
+      gf:     stat('pointsFor'),
+      ga:     stat('pointsAgainst'),
+      gd:     stat('pointsFor') - stat('pointsAgainst'),
+      points: stat('points'),
+    });
+  }
+  return groups;
+}
+
+// Derive tournament phase from normalised fixture list
+function wcTournamentPhase(fixtures) {
+  if (!fixtures?.length) return 'PRE_TOURNAMENT';
+
+  const byRound = {};
+  for (const f of fixtures) {
+    const r = (f.round ?? '').toLowerCase();
+    byRound[r] = byRound[r] ?? [];
+    byRound[r].push(f);
+  }
+
+  const allDone  = (key) => {
+    const matches = Object.entries(byRound).filter(([k]) => k.includes(key));
+    return matches.length > 0 && matches.every(([, fs]) => fs.every(f => f._statusShort === 'FT'));
+  };
+  const hasRound = (key) => Object.keys(byRound).some(k => k.includes(key));
+
+  if (allDone('final') && !hasRound('semi'))  return 'COMPLETE';
+  if (allDone('semi')  || hasRound('final'))  return 'FINAL';
+  if (allDone('quarter') || hasRound('semi')) return 'SEMI_FINALS';
+  if (allDone('round of 16') || hasRound('quarter')) return 'QUARTER_FINALS';
+  if (allDone('round of 32') || hasRound('round of 16')) return 'ROUND_OF_16';
+  if (allDone('group') || hasRound('round of 32')) return 'ROUND_OF_32';
+
+  const anyStarted = Object.entries(byRound)
+    .filter(([k]) => k.includes('group'))
+    .some(([, fs]) => fs.some(f => f._statusShort !== 'NS'));
+
+  return anyStarted ? 'GROUP_STAGE' : 'PRE_TOURNAMENT';
+}
+
+// Inject Poisson predictions onto upcoming fixtures
+function enrichWithPredictions(fixtures) {
+  return fixtures.map(f => {
+    if (f._statusShort !== 'NS') return f;
+    const home = f.teams?.home?.name;
+    const away = f.teams?.away?.name;
+    if (!home || !away) return f;
+    return { ...f, _prediction: wcPoisson(home, away) };
+  });
+}
+
+// ─── Monte Carlo full tournament simulation ───────────────────────────────────
+// Returns per-team reach probabilities cached for 1hr.
+// Keys: pAdvance, pR16, pQF, pSF, pFinal, pWinner
+let _tournamentReachCache = null;
+let _tournamentReachExpires = 0;
+
+function simulateTournamentReach(n = 3000) {
+  if (_tournamentReachCache && Date.now() < _tournamentReachExpires) {
+    return _tournamentReachCache;
+  }
+
+  // Counters per team
+  const counts = {};
+  for (const teams of Object.values(WC_GROUPS)) {
+    for (const t of teams) {
+      counts[t] = { advance: 0, r16: 0, qf: 0, sf: 0, final: 0, winner: 0 };
+    }
+  }
+
+  // Fast inline Poisson draw
+  function poissonDraw(lambda) {
+    const L = Math.exp(-lambda);
+    let k = 0, p = 1;
+    do { k++; p *= Math.random(); } while (p > L);
+    return k - 1;
+  }
+
+  // Simulate a single knockout match. Returns winner name.
+  // If 90-min result is a draw, use strength-weighted penalty coin flip.
+  function knockoutMatch(teamA, teamB) {
+    const BASE_LAMBDA = 1.30;
+    const sA = wcStrength(teamA);
+    const sB = wcStrength(teamB);
+    const diff = (sA - sB) / 400;
+    const lA = Math.max(0.3, BASE_LAMBDA * Math.exp( diff * 1.1));
+    const lB = Math.max(0.3, BASE_LAMBDA * Math.exp(-diff * 1.1));
+    const gA = poissonDraw(lA);
+    const gB = poissonDraw(lB);
+    if (gA > gB) return teamA;
+    if (gB > gA) return teamB;
+    // Penalties — slight strength bias
+    return Math.random() < sA / (sA + sB) ? teamA : teamB;
+  }
+
+  // Simulate a group stage: returns sorted [1st, 2nd, 3rd, 4th] and the third-place team's xPts
+  function simulateGroup(teams) {
+    const pts = {};
+    const gd  = {};
+    for (const t of teams) { pts[t] = 0; gd[t] = 0; }
+
+    for (let i = 0; i < teams.length; i++) {
+      for (let j = i + 1; j < teams.length; j++) {
+        const tA = teams[i], tB = teams[j];
+        const BASE_LAMBDA = 1.30;
+        const sA = wcStrength(tA), sB = wcStrength(tB);
+        const diff = (sA - sB) / 400;
+        const lA = Math.max(0.3, BASE_LAMBDA * Math.exp( diff * 1.1));
+        const lB = Math.max(0.3, BASE_LAMBDA * Math.exp(-diff * 1.1));
+        const gA = poissonDraw(lA), gB = poissonDraw(lB);
+        if (gA > gB) { pts[tA] += 3; }
+        else if (gA < gB) { pts[tB] += 3; }
+        else { pts[tA]++; pts[tB]++; }
+        gd[tA] += gA - gB;
+        gd[tB] += gB - gA;
+      }
+    }
+
+    const sorted = [...teams].sort((a, b) => pts[b] - pts[a] || gd[b] - gd[a]);
+    return { sorted, pts, gd };
+  }
+
+  for (let sim = 0; sim < n; sim++) {
+    const groupResults = {}; // letter → { sorted, pts, gd }
+    for (const [letter, teams] of Object.entries(WC_GROUPS)) {
+      groupResults[letter] = simulateGroup(teams);
+    }
+
+    // Mark group advance for top-2 per group
+    for (const [letter, { sorted }] of Object.entries(groupResults)) {
+      counts[sorted[0]].advance++;
+      counts[sorted[1]].advance++;
+    }
+
+    // Collect third-place teams with their points for best-8 selection
+    const thirdPlaceTeams = Object.entries(groupResults).map(([letter, { sorted, pts }]) => ({
+      team: sorted[2], pts: pts[sorted[2]], letter,
+    }));
+
+    // Sort third-place teams by pts desc, take best 8
+    thirdPlaceTeams.sort((a, b) => b.pts - a.pts);
+    const b8 = thirdPlaceTeams.slice(0, 8).map(x => x.team);
+
+    // R32 bracket — 16 matches
+    // Matches 1-8: Group winners A-H vs b8[0]-b8[7]
+    const groupLetters = Object.keys(WC_GROUPS);
+    const r32Winners = [];
+
+    // Matches 1–8
+    for (let i = 0; i < 8; i++) {
+      const winner = groupResults[groupLetters[i]].sorted[0];
+      const third  = b8[i];
+      r32Winners.push(knockoutMatch(winner, third));
+    }
+
+    // Matches 9-12: I1 vs J2, J1 vs I2, K1 vs L2, L1 vs K2
+    const [I1, I2] = groupResults['I'].sorted;
+    const [J1, J2] = groupResults['J'].sorted;
+    const [K1, K2] = groupResults['K'].sorted;
+    const [L1, L2] = groupResults['L'].sorted;
+    r32Winners.push(knockoutMatch(I1, J2));
+    r32Winners.push(knockoutMatch(J1, I2));
+    r32Winners.push(knockoutMatch(K1, L2));
+    r32Winners.push(knockoutMatch(L1, K2));
+
+    // Matches 13-16: A2 vs F2, B2 vs E2, C2 vs H2, D2 vs G2
+    const A2 = groupResults['A'].sorted[1];
+    const B2 = groupResults['B'].sorted[1];
+    const C2 = groupResults['C'].sorted[1];
+    const D2 = groupResults['D'].sorted[1];
+    const E2 = groupResults['E'].sorted[1];
+    const F2 = groupResults['F'].sorted[1];
+    const G2 = groupResults['G'].sorted[1];
+    const H2 = groupResults['H'].sorted[1];
+    r32Winners.push(knockoutMatch(A2, F2));
+    r32Winners.push(knockoutMatch(B2, E2));
+    r32Winners.push(knockoutMatch(C2, H2));
+    r32Winners.push(knockoutMatch(D2, G2));
+
+    // r32Winners now has 16 teams — mark r16 credit
+    for (const t of r32Winners) counts[t].r16++;
+
+    // R16 — 8 matches (pair winners sequentially: 0v1, 2v3, ...)
+    const r16Winners = [];
+    for (let i = 0; i < r32Winners.length; i += 2) {
+      r16Winners.push(knockoutMatch(r32Winners[i], r32Winners[i + 1]));
+    }
+    for (const t of r16Winners) counts[t].qf++;
+
+    // QF — 4 matches
+    const qfWinners = [];
+    for (let i = 0; i < r16Winners.length; i += 2) {
+      qfWinners.push(knockoutMatch(r16Winners[i], r16Winners[i + 1]));
+    }
+    for (const t of qfWinners) counts[t].sf++;
+
+    // SF — 2 matches
+    const sfWinners = [];
+    for (let i = 0; i < qfWinners.length; i += 2) {
+      sfWinners.push(knockoutMatch(qfWinners[i], qfWinners[i + 1]));
+    }
+    for (const t of sfWinners) counts[t].final++;
+
+    // Final
+    const champion = knockoutMatch(sfWinners[0], sfWinners[1]);
+    counts[champion].winner++;
+  }
+
+  // Normalise to probabilities
+  const result = {};
+  for (const [team, c] of Object.entries(counts)) {
+    result[team] = {
+      pAdvance: c.advance / n,
+      pR16:     c.r16     / n,
+      pQF:      c.qf      / n,
+      pSF:      c.sf      / n,
+      pFinal:   c.final   / n,
+      pWinner:  c.winner  / n,
+    };
+  }
+
+  _tournamentReachCache   = result;
+  _tournamentReachExpires = Date.now() + 60 * 60 * 1000; // 1hr
+  return result;
+}
+
+// ─── International Results (martj42 dataset) ─────────────────────────────────
+
+const INTL_RESULTS_URL = 'https://raw.githubusercontent.com/martj42/international_results/master/results.csv';
+let _intlResultsCache   = null;
+let _intlResultsExpires = 0;
+
+// Name aliases: our team name → martj42 dataset spelling
+const MARTJ42_ALIAS = {
+  'USA':               'United States',
+  'Trinidad & Tobago': 'Trinidad and Tobago',
+};
+function toMartj42(name) { return MARTJ42_ALIAS[name] ?? name; }
+
+async function getIntlResults() {
+  if (_intlResultsCache && Date.now() < _intlResultsExpires) return _intlResultsCache;
+  try {
+    const res  = await axios.get(INTL_RESULTS_URL, {
+      timeout: 20000, responseType: 'text', headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    const rows = res.data.trim().split('\n').slice(1);
+    const parsed = rows.map(line => {
+      const i1 = line.indexOf(',');
+      const i2 = line.indexOf(',', i1 + 1);
+      const i3 = line.indexOf(',', i2 + 1);
+      const i4 = line.indexOf(',', i3 + 1);
+      const i5 = line.indexOf(',', i4 + 1);
+      if (i4 === -1) return null;
+      const homeScore = parseInt(line.slice(i3 + 1, i4), 10);
+      const awayScore = parseInt(line.slice(i4 + 1, i5 === -1 ? undefined : i5), 10);
+      if (isNaN(homeScore) || isNaN(awayScore)) return null;
+      return {
+        date: line.slice(0, i1),
+        home: line.slice(i1 + 1, i2),
+        away: line.slice(i2 + 1, i3),
+        homeScore, awayScore,
+      };
+    }).filter(Boolean);
+    _intlResultsCache   = parsed;
+    _intlResultsExpires = Date.now() + 24 * 60 * 60 * 1000;
+    console.log(`[IntlResults] Loaded ${parsed.length} matches from martj42 dataset`);
+    return parsed;
+  } catch (err) {
+    console.warn('[IntlResults] Fetch failed:', err.message);
+    return _intlResultsCache ?? [];
+  }
+}
+
+function getTeamFormData(results, teamAlias, since = '2023-01-01') {
+  const matches = results
+    .filter(r => r.date >= since && (r.home === teamAlias || r.away === teamAlias))
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-12);
+  if (!matches.length) return null;
+
+  const items = matches.map(r => {
+    const isHome   = r.home === teamAlias;
+    const scored   = isHome ? r.homeScore : r.awayScore;
+    const conceded = isHome ? r.awayScore : r.homeScore;
+    const outcome  = scored > conceded ? 'W' : scored < conceded ? 'L' : 'D';
+    return { date: r.date, opponent: isHome ? r.away : r.home, scored, conceded, outcome,
+             pts: outcome === 'W' ? 3 : outcome === 'D' ? 1 : 0 };
+  });
+
+  const last5    = items.slice(-5);
+  const prev5    = items.slice(-10, -5);
+  const avgLast  = last5.reduce((s, x) => s + x.pts, 0) / (last5.length || 1);
+  const avgPrev  = prev5.length ? prev5.reduce((s, x) => s + x.pts, 0) / prev5.length : avgLast;
+  const diff     = avgLast - avgPrev;
+  const avg      = items.reduce((s, x) => s + x.pts, 0) / items.length;
+  const variance = items.reduce((s, x) => s + (x.pts - avg) ** 2, 0) / items.length;
+  const trend    = variance > 2.0  ? 'Inconsistent'
+                 : diff >= 0.7     ? 'Peaking'
+                 : diff <= -0.7    ? 'Declining'
+                 :                   'Steady';
+  return {
+    items, trend,
+    W: items.filter(x => x.outcome === 'W').length,
+    D: items.filter(x => x.outcome === 'D').length,
+    L: items.filter(x => x.outcome === 'L').length,
+    avgPts: +avg.toFixed(2),
+  };
+}
+
+function getH2HData(results, homeAlias, awayAlias) {
+  const meetings = results
+    .filter(r => (r.home === homeAlias && r.away === awayAlias) ||
+                 (r.home === awayAlias && r.away === homeAlias))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const total = meetings.length;
+  let homeWins = 0, awayWins = 0, draws = 0, totalGoals = 0;
+  for (const m of meetings) {
+    const hS = m.home === homeAlias ? m.homeScore : m.awayScore;
+    const aS = m.home === homeAlias ? m.awayScore : m.homeScore;
+    totalGoals += m.homeScore + m.awayScore;
+    if (hS > aS) homeWins++; else if (hS < aS) awayWins++; else draws++;
+  }
+  const last5 = meetings.slice(-5).reverse().map(m => ({
+    date: m.date,
+    homeScore: m.home === homeAlias ? m.homeScore : m.awayScore,
+    awayScore: m.home === homeAlias ? m.awayScore : m.homeScore,
+  }));
+  return { total, homeWins, awayWins, draws,
+           avgGoals: total ? +(totalGoals / total).toFixed(2) : 0,
+           last5, edge: homeWins > awayWins ? 'home' : awayWins > homeWins ? 'away' : null };
+}
+
+// ─── Golden Boot Predictor ───────────────────────────────────────────────────
+
+// All teams verified against the hardcoded WC_GROUPS 48-team draw.
+// No player from an unqualified nation is included.
+// Squads are assumed based on current international form — will be updated once
+// official WC 2026 squads are announced in May/June 2026.
+const WC_STRIKERS = [
+  // Group A
+  { name: 'Christian Pulisic',  team: 'USA',          share: 0.24 },
+  { name: 'Ismael Díaz',        team: 'Panama',       share: 0.34 },
+  // Group B
+  { name: 'Santiago Giménez',   team: 'Mexico',       share: 0.30 },
+  { name: 'Son Heung-min',      team: 'South Korea',  share: 0.28 },
+  // Group C
+  { name: 'Jonathan David',     team: 'Canada',       share: 0.30 },
+  { name: 'Darwin Núñez',       team: 'Uruguay',      share: 0.30 },
+  { name: 'El Bilal Touré',     team: 'Mali',         share: 0.32 },
+  { name: 'Eldor Shomurodov',   team: 'Uzbekistan',   share: 0.30 },
+  // Group D
+  { name: 'Álvaro Morata',      team: 'Spain',        share: 0.24 },
+  { name: 'Mikel Oyarzabal',    team: 'Spain',        share: 0.18 },
+  { name: 'Ayase Ueda',         team: 'Japan',        share: 0.32 },
+  // Group E
+  { name: 'Kai Havertz',        team: 'Germany',      share: 0.26 },
+  { name: 'Florian Wirtz',      team: 'Germany',      share: 0.18 },
+  { name: 'Luis Díaz',          team: 'Colombia',     share: 0.24 },
+  { name: 'Enner Valencia',     team: 'Ecuador',      share: 0.32 },
+  // Group F
+  { name: 'Cristiano Ronaldo',  team: 'Portugal',     share: 0.30 },
+  { name: 'Gonçalo Ramos',      team: 'Portugal',     share: 0.22 },
+  { name: 'Lautaro Martínez',   team: 'Argentina',    share: 0.28 },
+  { name: 'Julián Álvarez',     team: 'Argentina',    share: 0.20 },
+  { name: 'Chris Wood',         team: 'New Zealand',  share: 0.40 },
+  // Group G
+  { name: 'Kylian Mbappé',      team: 'France',       share: 0.40 },
+  { name: 'Antoine Griezmann',  team: 'France',       share: 0.18 },
+  { name: 'Romelu Lukaku',      team: 'Belgium',      share: 0.32 },
+  { name: 'Vinicius Jr.',       team: 'Brazil',       share: 0.27 },
+  { name: 'Rodrygo',            team: 'Brazil',       share: 0.18 },
+  // Group H
+  { name: 'Harry Kane',         team: 'England',      share: 0.33 },
+  { name: 'Bukayo Saka',        team: 'England',      share: 0.18 },
+  { name: 'Cody Gakpo',         team: 'Netherlands',  share: 0.26 },
+  { name: 'Memphis Depay',      team: 'Netherlands',  share: 0.22 },
+  { name: 'Sadio Mané',         team: 'Senegal',      share: 0.28 },
+  { name: 'Ismaila Sarr',       team: 'Senegal',      share: 0.20 },
+  { name: 'Roman Yaremchuk',    team: 'Ukraine',      share: 0.28 },
+  // Group I
+  { name: 'Youssef En-Nesyri',  team: 'Morocco',      share: 0.30 },
+  { name: 'Andrej Kramarić',    team: 'Croatia',      share: 0.26 },
+  { name: 'Rasmus Højlund',     team: 'Denmark',      share: 0.30 },
+  { name: 'Victor Osimhen',     team: 'Nigeria',      share: 0.32 },
+  // Group J
+  { name: 'Ciro Immobile',      team: 'Italy',        share: 0.28 },
+  { name: 'Mathew Leckie',      team: 'Australia',    share: 0.24 },
+  { name: 'Mohammed Kudus',     team: 'Ghana',        share: 0.30 },
+  // Group K
+  { name: 'Mehdi Taremi',       team: 'Iran',         share: 0.32 },
+  { name: 'Breel Embolo',       team: 'Switzerland',  share: 0.30 },
+  { name: 'Vincent Aboubakar',  team: 'Cameroon',     share: 0.34 },
+  // Group L
+  { name: 'Dušan Vlahović',     team: 'Serbia',       share: 0.30 },
+  { name: 'Arda Güler',         team: 'Turkey',       share: 0.24 },
+  { name: 'Salem Al-Dawsari',   team: 'Saudi Arabia', share: 0.28 },
+];
+
+function computeGoldenBoot(reach) {
+  const BASE_LAMBDA = 1.30;
+  return WC_STRIKERS.map(s => {
+    const str      = wcStrength(s.team);
+    const lambda   = Math.max(0.3, BASE_LAMBDA * Math.exp((str - 1500) / 400 * 1.1));
+    const r        = reach[s.team] ?? {};
+    const expGames = 3 + (r.pAdvance ?? 0) + (r.pR16 ?? 0) + (r.pQF ?? 0) + (r.pSF ?? 0) + (r.pFinal ?? 0);
+    const xGoals   = +(lambda * expGames * s.share).toFixed(2);
+    return { name: s.name, team: s.team, xGoals, expGames: +expGames.toFixed(1) };
+  }).sort((a, b) => b.xGoals - a.xGoals).slice(0, 15);
+}
+
+const WC_START = new Date('2026-06-11T00:00:00Z');
+
+// GET /api/wc/tournament
+app.get('/api/wc/tournament', async (req, res) => {
+  // Don't hit ESPN until the tournament is actually underway — before then the
+  // fifa.world endpoint returns unrelated FIFA fixtures and pollutes the UI.
+  if (Date.now() < WC_START.getTime()) {
+    // Pre-calculate all 6 match predictions + predicted standings for each group
+    const groupMatchPredictions  = {};
+    const groupPredictedStandings = {};
+
+    for (const [letter, teams] of Object.entries(WC_GROUPS)) {
+      const matches = [];
+      for (let i = 0; i < teams.length; i++) {
+        for (let j = i + 1; j < teams.length; j++) {
+          matches.push({ home: teams[i], away: teams[j], ...wcPoisson(teams[i], teams[j]) });
+        }
+      }
+      groupMatchPredictions[letter] = matches;
+
+      // Expected points: P(win)×3 + P(draw)×1 per match, summed over 3 games
+      const xPts = {};
+      const xGD  = {};
+      for (const t of teams) { xPts[t] = 0; xGD[t] = 0; }
+      for (const m of matches) {
+        xPts[m.home] += m.homeWin * 3 + m.draw;
+        xPts[m.away] += m.awayWin * 3 + m.draw;
+        xGD[m.home]  += m.lambdaHome - m.lambdaAway;
+        xGD[m.away]  += m.lambdaAway - m.lambdaHome;
+      }
+
+      groupPredictedStandings[letter] = teams
+        .map(t => ({ team: t, xPts: Math.round(xPts[t]), xGD: +xGD[t].toFixed(2) }))
+        .sort((a, b) => b.xPts - a.xPts || b.xGD - a.xGD);
+    }
+
+    // ── Group of Death rankings ──────────────────────────────────────────────
+    const groupInsights = Object.entries(WC_GROUPS).map(([letter, teams]) => {
+      const strengths = teams.map(t => wcStrength(t));
+      const avg       = Math.round(strengths.reduce((s, v) => s + v, 0) / strengths.length);
+      const gap       = Math.max(...strengths) - Math.min(...strengths);
+      const score     = Math.round(avg - gap * 0.4);
+      const label     = score >= 1600 ? 'Group of Death'
+                      : score >= 1540 ? 'Tight Group'
+                      : score >= 1490 ? 'Balanced'
+                      : score >= 1450 ? 'Wide Open'
+                      : 'Mismatch';
+      const teamStrengths = teams
+        .map(t => ({ team: t, strength: wcStrength(t) }))
+        .sort((a, b) => b.strength - a.strength);
+      return { letter, avg, gap, score, label, teamStrengths };
+    }).sort((a, b) => b.score - a.score);
+
+    // ── Upset Tracker ────────────────────────────────────────────────────────
+    const upsetMatches = [];
+    for (const [letter, matches] of Object.entries(groupMatchPredictions)) {
+      for (const m of matches) {
+        const hStr = wcStrength(m.home);
+        const aStr = wcStrength(m.away);
+        if (hStr === aStr) continue;
+        const isHomeUnderdog = hStr < aStr;
+        const underdogWin    = isHomeUnderdog ? m.homeWin : m.awayWin;
+        if (underdogWin >= 0.30) {
+          upsetMatches.push({
+            group:        letter,
+            home:         m.home,
+            away:         m.away,
+            underdog:     isHomeUnderdog ? m.home : m.away,
+            favourite:    isHomeUnderdog ? m.away : m.home,
+            underdogWin,
+            draw:         m.draw,
+            predictedScore: m.predictedScore,
+            label:        underdogWin >= 0.40 ? 'Watch This' : 'Upset Alert',
+          });
+        }
+      }
+    }
+    upsetMatches.sort((a, b) => b.underdogWin - a.underdogWin);
+
+    return res.json({
+      phase:                  'PRE_TOURNAMENT',
+      groups:                 {},
+      groupFixtures:          [],
+      knockoutFixtures:       [],
+      hardcodedGroups:        WC_GROUPS,
+      groupMatchPredictions,
+      groupPredictedStandings,
+      tournamentReach:        simulateTournamentReach(),
+      goldenBoot:             computeGoldenBoot(simulateTournamentReach()),
+      groupInsights,
+      upsetMatches,
+      hasLiveData:            false,
+    });
+  }
+
+  try {
+    const [scoreboardData, standingsData] = await Promise.allSettled([
+      fetchESPN(ESPN_SCOREBOARD, 'wc_scoreboard'),
+      fetchESPN(ESPN_STANDINGS,  'wc_standings'),
+    ]);
+
+    const fixtures = scoreboardData.status === 'fulfilled'
+      ? parseESPNFixtures(scoreboardData.value)
+      : [];
+
+    const groups = standingsData.status === 'fulfilled'
+      ? parseESPNStandings(standingsData.value)
+      : {};
+
+    const phase            = wcTournamentPhase(fixtures);
+    const groupFixtures    = fixtures.filter(f => (f.round ?? '').toLowerCase().includes('group'));
+    const knockoutFixtures = fixtures.filter(f => !(f.round ?? '').toLowerCase().includes('group'));
+    const hasLiveData      = fixtures.length > 0 || Object.keys(groups).length > 0;
+
+    res.json({
+      phase,
+      groups,
+      groupFixtures:    enrichWithPredictions(groupFixtures),
+      knockoutFixtures: enrichWithPredictions(knockoutFixtures),
+      hardcodedGroups:  WC_GROUPS,
+      hasLiveData,
+    });
+  } catch (err) {
+    console.error('[WC] Tournament fetch failed:', err.message);
+    res.json({ phase: 'PRE_TOURNAMENT', groups: {}, groupFixtures: [], knockoutFixtures: [], hardcodedGroups: WC_GROUPS, hasLiveData: false });
+  }
+});
+
+// GET /api/wc/predict?home=Argentina&away=France
+app.get('/api/wc/predict', (req, res) => {
+  const { home, away } = req.query;
+  if (!home || !away) return res.status(400).json({ error: 'home and away params required' });
+  res.json(wcPoisson(home, away));
+});
+
+// GET /api/wc/form/:team — recent international form from martj42 dataset
+app.get('/api/wc/form/:team', async (req, res) => {
+  const { team } = req.params;
+  try {
+    const results = await getIntlResults();
+    const alias   = toMartj42(team);
+    const form    = getTeamFormData(results, alias);
+    res.json({ team, form });
+  } catch (err) {
+    console.error('[WC Form]', err.message);
+    res.json({ team, form: null });
+  }
+});
+
+// GET /api/wc/h2h?home=X&away=Y — head to head history from martj42 dataset
+app.get('/api/wc/h2h', async (req, res) => {
+  const { home, away } = req.query;
+  if (!home || !away) return res.status(400).json({ error: 'home and away required' });
+  try {
+    const results   = await getIntlResults();
+    const homeAlias = toMartj42(home);
+    const awayAlias = toMartj42(away);
+    const h2h       = getH2HData(results, homeAlias, awayAlias);
+    res.json({ home, away, ...h2h });
+  } catch (err) {
+    console.error('[WC H2H]', err.message);
+    res.json({ home, away, total: 0, homeWins: 0, awayWins: 0, draws: 0, avgGoals: 0, last5: [], edge: null });
+  }
+});
+
 // ─── Cron jobs ────────────────────────────────────────────────────────────────
 
 cron.schedule('0 * * * *',    autoFillResults);            // every hour
@@ -2038,5 +2858,3 @@ app.listen(PORT, () => {
   backfillPendingResults();
   autoFillResults();
 });
-
-module.exports = app;

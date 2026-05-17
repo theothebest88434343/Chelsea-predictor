@@ -19,11 +19,14 @@ ODDS_API_KEY=
 VAPID_PUBLIC_KEY=
 VAPID_SECRET_KEY=
 PORT=3001
+WC_API_KEY=
+WC_LEAGUE_ID=1
 ```
 
 - Groq: [console.groq.com](https://console.groq.com) (free)
 - Odds API: [the-odds-api.com](https://the-odds-api.com) (free tier)
 - VAPID keys: `npx web-push generate-vapid-keys`
+- WC API: [api-football.com](https://api-football.com) — `WC_LEAGUE_ID` defaults to `1` (FIFA World Cup)
 
 ## Production
 

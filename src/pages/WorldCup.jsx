@@ -1,0 +1,1550 @@
+import { useState, useEffect } from 'react';
+import { format, parseISO } from 'date-fns';
+
+// ─── Flag map ─────────────────────────────────────────────────────────────────
+
+const FLAGS = {
+  'Argentina':          '🇦🇷', 'Australia':       '🇦🇺', 'Algeria':         '🇩🇿',
+  'Belgium':            '🇧🇪', 'Bolivia':         '🇧🇴', 'Brazil':          '🇧🇷',
+  'Cameroon':           '🇨🇲', 'Canada':          '🇨🇦', 'Colombia':        '🇨🇴',
+  'Croatia':            '🇭🇷', 'Cuba':            '🇨🇺', 'Denmark':         '🇩🇰',
+  'DR Congo':           '🇨🇩', 'Ecuador':         '🇪🇨', 'England':         '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
+  'France':             '🇫🇷', 'Germany':         '🇩🇪', 'Ghana':           '🇬🇭',
+  'Honduras':           '🇭🇳', 'Indonesia':       '🇮🇩', 'Iran':            '🇮🇷',
+  'Italy':              '🇮🇹', 'Jamaica':         '🇯🇲', 'Japan':           '🇯🇵',
+  'Kenya':              '🇰🇪', 'Mali':            '🇲🇱', 'Mexico':          '🇲🇽',
+  'Morocco':            '🇲🇦', 'Netherlands':     '🇳🇱', 'New Zealand':     '🇳🇿',
+  'Nigeria':            '🇳🇬', 'Panama':          '🇵🇦', 'Portugal':        '🇵🇹',
+  'Saudi Arabia':       '🇸🇦', 'Senegal':         '🇸🇳', 'Serbia':          '🇷🇸',
+  'Slovenia':           '🇸🇮', 'South Africa':    '🇿🇦', 'South Korea':     '🇰🇷',
+  'Spain':              '🇪🇸', 'Switzerland':     '🇨🇭', 'Trinidad & Tobago':'🇹🇹',
+  'Turkey':             '🇹🇷', 'Uganda':          '🇺🇬', 'Ukraine':         '🇺🇦',
+  'Uruguay':            '🇺🇾', 'USA':             '🇺🇸', 'United States':   '🇺🇸',
+  'Uzbekistan':         '🇺🇿', 'Venezuela':       '🇻🇪',
+};
+
+function flag(name) {
+  if (FLAGS[name]) return FLAGS[name];
+  const key = Object.keys(FLAGS).find(k => name?.toLowerCase().includes(k.toLowerCase()));
+  return key ? FLAGS[key] : '🏳️';
+}
+
+
+// One accent colour per group A–L
+const GROUP_COLORS = {
+  A: '#3b82f6', // blue
+  B: '#10b981', // emerald
+  C: '#f59e0b', // amber
+  D: '#ef4444', // red
+  E: '#8b5cf6', // violet
+  F: '#06b6d4', // cyan
+  G: '#f97316', // orange
+  H: '#ec4899', // pink
+  I: '#84cc16', // lime
+  J: '#14b8a6', // teal
+  K: '#a855f7', // purple
+  L: '#fb923c', // light-orange
+};
+
+// ─── Data fetching ────────────────────────────────────────────────────────────
+
+function useWCTournament() {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    fetch('/api/wc/tournament', { signal: controller.signal })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => { setData(d); setLoading(false); })
+      .catch(err => {
+        if (err.name !== 'AbortError') { setError(err.message); setLoading(false); }
+      });
+    return () => controller.abort();
+  }, []);
+
+  return { data, loading, error };
+}
+
+function useFormData(team) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!team) { setData(null); return; }
+    setLoading(true); setData(null);
+    const ctrl = new AbortController();
+    fetch(`/api/wc/form/${encodeURIComponent(team)}`, { signal: ctrl.signal })
+      .then(r => r.json())
+      .then(d => { setData(d.form); setLoading(false); })
+      .catch(() => setLoading(false));
+    return () => ctrl.abort();
+  }, [team]);
+  return { data, loading };
+}
+
+function useH2HData(home, away, enabled) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!enabled || !home || !away) { setData(null); return; }
+    setLoading(true); setData(null);
+    const ctrl = new AbortController();
+    fetch(`/api/wc/h2h?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`, { signal: ctrl.signal })
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+    return () => ctrl.abort();
+  }, [home, away, enabled]);
+  return { data, loading };
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const PHASE_LABELS = {
+  PRE_TOURNAMENT: 'Pre-Tournament',
+  GROUP_STAGE:    'Group Stage',
+  ROUND_OF_32:    'Round of 32',
+  ROUND_OF_16:    'Round of 16',
+  QUARTER_FINALS: 'Quarter-Finals',
+  SEMI_FINALS:    'Semi-Finals',
+  FINAL:          'Final',
+  COMPLETE:       'Complete',
+};
+
+function outcomeColor(status, homeGoals, awayGoals, perspective) {
+  if (!['FT','AET','PEN'].includes(status)) return 'var(--text-muted)';
+  const h = parseInt(homeGoals, 10);
+  const a = parseInt(awayGoals, 10);
+  if (isNaN(h) || isNaN(a)) return 'var(--text-muted)';
+  if (perspective === 'home') {
+    if (h > a) return 'var(--green)';
+    if (h < a) return 'var(--red)';
+    return 'var(--draw)';
+  }
+  if (a > h) return 'var(--green)';
+  if (a < h) return 'var(--red)';
+  return 'var(--draw)';
+}
+
+function fmtKickoff(ts) {
+  if (!ts) return '';
+  try { return format(typeof ts === 'number' ? new Date(ts * 1000) : parseISO(ts), 'd MMM HH:mm'); }
+  catch { return ''; }
+}
+
+function pct(v) { return `${Math.round((v ?? 0) * 100)}%`; }
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function PhaseBadge({ phase }) {
+  return (
+    <div style={{
+      display:        'inline-flex',
+      alignItems:     'center',
+      gap:            6,
+      background:     'var(--surface2)',
+      border:         '1px solid var(--gold)',
+      borderRadius:   20,
+      padding:        '4px 14px',
+      fontSize:       11,
+      fontWeight:     700,
+      letterSpacing:  1,
+      color:          'var(--gold)',
+      marginBottom:   16,
+    }}>
+      🌍 {PHASE_LABELS[phase] ?? phase}
+    </div>
+  );
+}
+
+function StandingsTable({ rows }) {
+  if (!rows?.length) return null;
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <thead>
+        <tr style={{ color: 'var(--text-muted)', fontSize: 10 }}>
+          <th style={{ textAlign: 'left',   padding: '3px 0', fontWeight: 600 }}>#</th>
+          <th style={{ textAlign: 'left',   padding: '3px 4px', fontWeight: 600 }}>Team</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>P</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>W</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>D</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>L</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>GD</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>Pts</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.slice().sort((a, b) => b.points - a.points || b.gd - a.gd || b.gf - a.gf)
+          .map((row, i) => (
+          <tr key={row.team} style={{
+            background:   i < 2 ? 'rgba(255,215,0,0.06)' : 'transparent',
+            borderTop:    '1px solid var(--border)',
+          }}>
+            <td style={{ padding: '5px 0', color: i < 2 ? 'var(--gold)' : 'var(--text-muted)', fontWeight: 700 }}>
+              {i + 1}
+            </td>
+            <td style={{ padding: '5px 4px', fontWeight: 600 }}>{row.team}</td>
+            <td style={{ padding: '5px 4px', textAlign: 'center', color: 'var(--text-muted)' }}>{row.played}</td>
+            <td style={{ padding: '5px 4px', textAlign: 'center' }}>{row.won}</td>
+            <td style={{ padding: '5px 4px', textAlign: 'center', color: 'var(--text-muted)' }}>{row.drawn}</td>
+            <td style={{ padding: '5px 4px', textAlign: 'center', color: 'var(--text-muted)' }}>{row.lost}</td>
+            <td style={{ padding: '5px 4px', textAlign: 'center', color: row.gd >= 0 ? 'var(--green)' : 'var(--red)' }}>
+              {row.gd > 0 ? `+${row.gd}` : row.gd}
+            </td>
+            <td style={{ padding: '5px 4px', textAlign: 'center', fontWeight: 700, color: 'var(--gold)' }}>{row.points}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function MatchRow({ fixture }) {
+  const status  = fixture.fixture?.status?.short ?? 'NS';
+  const played  = ['FT','AET','PEN'].includes(status);
+  const live    = ['1H','HT','2H','ET','BT','P','INT'].includes(status);
+  const home    = fixture.teams?.home?.name ?? '?';
+  const away    = fixture.teams?.away?.name ?? '?';
+  const hGoals  = fixture.goals?.home;
+  const aGoals  = fixture.goals?.away;
+  const pred    = fixture._prediction;
+  const kickoff = fixture.fixture?.date ?? fixture.fixture?.timestamp;
+
+  return (
+    <div style={{
+      padding:       '10px 0',
+      borderBottom:  '1px solid var(--border)',
+      display:       'flex',
+      alignItems:    'center',
+      gap:           8,
+    }}>
+      {/* Status pill */}
+      <div style={{
+        minWidth:   38,
+        fontSize:   10,
+        fontWeight: 700,
+        textAlign:  'center',
+        padding:    '2px 6px',
+        borderRadius: 4,
+        background: live ? 'rgba(255,60,60,0.15)' : played ? 'rgba(255,255,255,0.07)' : 'var(--surface2)',
+        color:      live ? 'var(--red)' : played ? 'var(--text-muted)' : 'var(--text-muted)',
+      }}>
+        {live ? '🔴 LIVE' : played ? status : fmtKickoff(kickoff) || 'TBC'}
+      </div>
+
+      {/* Teams + score */}
+      <div style={{ flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontWeight: 600, fontSize: 13, color: played ? outcomeColor(status, hGoals, aGoals, 'home') : 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span>{flag(home)}</span>{home}
+          </span>
+
+          {played ? (
+            <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: 2, margin: '0 8px' }}>
+              {hGoals} – {aGoals}
+            </span>
+          ) : pred ? (
+            <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, letterSpacing: 2, margin: '0 8px', color: 'var(--gold)' }}>
+              {pred.predictedScore.replace('-', '–')}
+            </span>
+          ) : (
+            <span style={{ margin: '0 8px', color: 'var(--text-muted)', fontSize: 14 }}>vs</span>
+          )}
+
+          <span style={{ fontWeight: 600, fontSize: 13, color: played ? outcomeColor(status, hGoals, aGoals, 'away') : 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
+            {away}<span>{flag(away)}</span>
+          </span>
+        </div>
+
+        {/* Prediction probabilities for upcoming matches */}
+        {pred && !played && !live && (
+          <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <span className="chip chip-gold"  style={{ fontSize: 10, padding: '1px 8px' }}>{pct(pred.homeWin)} {home.split(' ')[0]}</span>
+            <span className="chip chip-muted" style={{ fontSize: 10, padding: '1px 8px' }}>{pct(pred.draw)} Draw</span>
+            <span className="chip chip-muted" style={{ fontSize: 10, padding: '1px 8px' }}>{pct(pred.awayWin)} {away.split(' ')[0]}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Group stage view — shows all 12 groups
+function GroupStageView({ data }) {
+  const { groups, groupFixtures, hardcodedGroups } = data;
+  const [expandedGroup, setExpandedGroup] = useState(null);
+
+  const groupLetters = Object.keys(hardcodedGroups);
+
+  // Map API standings by group letter — extract letter from group name like "Group A"
+  const apiGroupsByLetter = {};
+  for (const [name, rows] of Object.entries(groups ?? {})) {
+    const letter = name.replace(/^group\s*/i, '').trim();
+    apiGroupsByLetter[letter] = rows;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {groupLetters.map(letter => {
+        const apiRows   = apiGroupsByLetter[letter];
+        const teams     = hardcodedGroups[letter];
+        const isOpen    = expandedGroup === letter;
+
+        // Build fallback standing rows from hardcoded teams
+        const standingRows = apiRows ?? teams.map((t, i) => ({
+          rank: i + 1, team: t, played: 0, won: 0, drawn: 0, lost: 0,
+          gf: 0, ga: 0, gd: 0, points: 0,
+        }));
+
+        // Filter group fixtures for this group's teams
+        const teamSet = new Set(teams.map(t => t.toLowerCase()));
+        const groupMatches = (groupFixtures ?? []).filter(f => {
+          const h = (f.teams?.home?.name ?? '').toLowerCase();
+          const a = (f.teams?.away?.name ?? '').toLowerCase();
+          return teamSet.has(h) || teamSet.has(a);
+        });
+
+        const played   = groupMatches.filter(f => ['FT','AET','PEN'].includes(f.fixture?.status?.short)).length;
+        const total    = groupMatches.length || 6;
+        const progress = total ? Math.round((played / total) * 100) : 0;
+        const done     = progress === 100;
+
+        return (
+          <div key={letter} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+            {/* Group header */}
+            <button
+              onClick={() => setExpandedGroup(isOpen ? null : letter)}
+              style={{
+                width:       '100%',
+                background:  'transparent',
+                border:      'none',
+                padding:     '12px 14px',
+                display:     'flex',
+                alignItems:  'center',
+                cursor:      'pointer',
+                gap:         10,
+              }}
+            >
+              <div style={{
+                width:      32, height: 32,
+                borderRadius: 8,
+                background:  'var(--surface2)',
+                display:     'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily:  'Bebas Neue, sans-serif',
+                fontSize:    18,
+                color:       'var(--gold)',
+                flexShrink:  0,
+              }}>
+                {letter}
+              </div>
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
+                  Group {letter}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {teams.join(' · ')}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ fontSize: 11, color: done ? 'var(--green)' : 'var(--text-muted)', fontWeight: 600 }}>
+                  {done ? '✓ Complete' : `${played}/${total}`}
+                </div>
+              </div>
+              <div style={{
+                fontSize: 14, color: 'var(--text-muted)',
+                transform: isOpen ? 'rotate(180deg)' : 'none',
+                transition: '200ms',
+              }}>▾</div>
+            </button>
+
+            {isOpen && (
+              <div style={{ padding: '0 14px 14px' }}>
+                <StandingsTable rows={standingRows} />
+                {groupMatches.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: 0.5, marginBottom: 4 }}>
+                      MATCHES
+                    </div>
+                    {groupMatches.map((f, i) => <MatchRow key={f.fixture?.id ?? i} fixture={f} />)}
+                  </div>
+                )}
+                {groupMatches.length === 0 && (
+                  <div style={{ marginTop: 12, color: 'var(--text-muted)', fontSize: 12 }}>
+                    Fixtures will appear once the API returns schedule data.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Knockout bracket view
+function KnockoutView({ data }) {
+  const { knockoutFixtures } = data;
+
+  if (!knockoutFixtures?.length) {
+    return (
+      <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>
+        <div style={{ fontSize: 32, marginBottom: 8 }}>🏆</div>
+        <div style={{ fontWeight: 600 }}>Knockout rounds not yet unlocked</div>
+        <div style={{ fontSize: 12, marginTop: 4 }}>Check back once the group stage is complete</div>
+      </div>
+    );
+  }
+
+  const rounds = {};
+  for (const f of knockoutFixtures) {
+    const round = f.league?.round ?? 'Unknown';
+    rounds[round] = rounds[round] ?? [];
+    rounds[round].push(f);
+  }
+
+  const roundOrder = [
+    'Round of 32', 'Round of 16', 'Quarter-finals',
+    'Semi-finals', '3rd Place Final', 'Final',
+  ];
+
+  const sortedRounds = Object.keys(rounds).sort((a, b) => {
+    const ai = roundOrder.findIndex(r => a.toLowerCase().includes(r.toLowerCase()));
+    const bi = roundOrder.findIndex(r => b.toLowerCase().includes(r.toLowerCase()));
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {sortedRounds.map(round => (
+        <div key={round} className="card">
+          <div className="card-title">{round}</div>
+          {rounds[round].map((f, i) => <MatchRow key={f.fixture?.id ?? i} fixture={f} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Predicted standings tab — all 12 groups in one scrollable view
+function PredictedTableView({ data, onTeamClick }) {
+  const { hardcodedGroups, groupPredictedStandings } = data;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {Object.entries(hardcodedGroups).map(([letter, teams]) => {
+        const rows  = groupPredictedStandings?.[letter] ?? [];
+        const color = GROUP_COLORS[letter] ?? 'var(--gold)';
+
+        return (
+          <div key={letter} className="card" style={{ borderLeft: `3px solid ${color}`, padding: '12px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: 6,
+                background: `${color}22`, border: `1.5px solid ${color}55`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, color,
+              }}>
+                {letter}
+              </div>
+              <span style={{ fontWeight: 700, fontSize: 13, color }}>Group {letter}</span>
+            </div>
+
+            {rows.map((row, i) => {
+              const advances = i < 2;
+              const maxPts   = rows[0]?.xPts ?? 1;
+              const barPct   = maxPts > 0 ? (row.xPts / maxPts) * 100 : 0;
+              return (
+                <div key={row.team} style={{
+                  display:      'flex',
+                  alignItems:   'center',
+                  gap:          8,
+                  padding:      '7px 0',
+                  borderBottom: i < rows.length - 1 ? '1px solid var(--border)' : 'none',
+                }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: advances ? color : 'var(--text-muted)', minWidth: 16, textAlign: 'center' }}>
+                    {i + 1}
+                  </span>
+                  <span style={{ fontSize: 15, cursor: 'pointer' }} onClick={() => onTeamClick?.(row.team)}>{flag(row.team)}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, flex: 1, cursor: 'pointer' }} onClick={() => onTeamClick?.(row.team)}>{row.team}</span>
+                  <div style={{ width: 70, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+                    <div style={{ width: `${barPct}%`, height: '100%', borderRadius: 3, background: advances ? color : 'rgba(255,255,255,0.18)' }} />
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: advances ? color : 'var(--text-muted)', minWidth: 42, textAlign: 'right' }}>
+                    {row.xPts} pts
+                  </span>
+                  {advances && (
+                    <span style={{ fontSize: 9, fontWeight: 700, color, background: `${color}22`, border: `1px solid ${color}55`, borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                      ADV
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8, fontStyle: 'italic' }}>
+              Expected points from 50k simulations · top 2 advance
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Form Sparkline ──────────────────────────────────────────────────────────
+function FormSparkline({ items, color }) {
+  if (!items?.length) return null;
+  const W = 280, H = 52, PAD = 6;
+  const n     = items.length;
+  const maxG  = Math.max(...items.map(x => x.scored), 3);
+  const xOf   = i => PAD + (n > 1 ? (i / (n - 1)) * (W - PAD * 2) : (W - PAD * 2) / 2);
+  const yOf   = g => H - PAD - (g / maxG) * (H - PAD * 2 - 6);
+  const pts   = items.map((x, i) => `${xOf(i).toFixed(1)},${yOf(x.scored).toFixed(1)}`).join(' ');
+  const OC    = { W: '#10b981', D: '#f59e0b', L: '#ef4444' };
+  const cellW = (W - PAD * 2) / n;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 52 }}>
+      {items.map((x, i) => (
+        <rect key={i} x={PAD + i * cellW} y={0} width={cellW} height={H}
+              fill={OC[x.outcome] ?? '#888'} opacity={0.09} rx={2} />
+      ))}
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
+      {items.map((x, i) => (
+        <circle key={i} cx={xOf(i)} cy={yOf(x.scored)} r={3} fill={color} stroke="var(--surface)" strokeWidth={1} />
+      ))}
+    </svg>
+  );
+}
+
+// ─── Form Section (used inside TeamDetailModal) ───────────────────────────────
+function FormSection({ team, color }) {
+  const { data: form, loading } = useFormData(team);
+  const TREND = {
+    Peaking:      { emoji: '📈', color: '#10b981' },
+    Declining:    { emoji: '📉', color: '#ef4444' },
+    Inconsistent: { emoji: '〰️', color: '#f97316' },
+    Steady:       { emoji: '→',  color: '#3b82f6' },
+  };
+  return (
+    <div className="card">
+      <div className="card-title">Recent Form</div>
+      {loading && (
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>Loading…</div>
+      )}
+      {!loading && !form && (
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>No recent data available</div>
+      )}
+      {!loading && form && (() => {
+        const meta = TREND[form.trend] ?? { emoji: '→', color: 'var(--gold)' };
+        return (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, background: `${meta.color}22`, border: `1px solid ${meta.color}55`, color: meta.color, borderRadius: 6, padding: '3px 10px' }}>
+                {meta.emoji} {form.trend}
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Last {form.items.length} games:
+                <span style={{ color: '#10b981', fontWeight: 700 }}> {form.W}W</span>
+                <span style={{ color: '#f59e0b', fontWeight: 700 }}> {form.D}D</span>
+                <span style={{ color: '#ef4444', fontWeight: 700 }}> {form.L}L</span>
+              </span>
+            </div>
+            <FormSparkline items={form.items} color={color} />
+            <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+              {form.items.slice(-5).map((x, i) => {
+                const oc = x.outcome === 'W' ? '#10b981' : x.outcome === 'D' ? '#f59e0b' : '#ef4444';
+                return (
+                  <div key={i} style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ borderRadius: 6, background: `${oc}22`, border: `1px solid ${oc}55`, padding: '5px 2px' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: oc }}>{x.outcome}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>{x.scored}–{x.conceded}</div>
+                    </div>
+                    <div style={{ fontSize: 8, color: 'var(--text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {x.opponent.split(' ')[0]}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 6, fontStyle: 'italic' }}>
+              International results since Jan 2023 · martj42 dataset
+            </div>
+          </>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ─── H2H Panel (lazy-loaded inside match cards) ───────────────────────────────
+function H2HPanel({ home, away, color }) {
+  const { data, loading } = useH2HData(home, away, true);
+  if (loading) return (
+    <div style={{ padding: '10px 0', color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>Loading H2H…</div>
+  );
+  if (!data || data.total === 0) return (
+    <div style={{ padding: '10px 0', color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>
+      No H2H history found
+    </div>
+  );
+
+  const edgeLabel = data.edge === 'home' ? home : data.edge === 'away' ? away : null;
+
+  return (
+    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 8 }}>
+        HEAD TO HEAD · {data.total} MEETINGS
+      </div>
+
+      {/* Win/Draw/Loss bar */}
+      <div style={{ display: 'flex', height: 20, borderRadius: 4, overflow: 'hidden', marginBottom: 6 }}>
+        {data.homeWins > 0 && (
+          <div style={{ flex: data.homeWins, background: '#3b82f688', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>{data.homeWins}</span>
+          </div>
+        )}
+        {data.draws > 0 && (
+          <div style={{ flex: data.draws, background: 'rgba(255,215,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>{data.draws}</span>
+          </div>
+        )}
+        {data.awayWins > 0 && (
+          <div style={{ flex: data.awayWins, background: '#f9731688', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>{data.awayWins}</span>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginBottom: 10 }}>
+        <span style={{ color: '#3b82f6', fontWeight: 600 }}>{home} wins</span>
+        <span style={{ color: 'var(--gold)' }}>{data.draws} draws · {data.avgGoals} avg goals/game</span>
+        <span style={{ color: '#f97316', fontWeight: 600 }}>{away} wins</span>
+      </div>
+
+      {/* Last 5 */}
+      {data.last5?.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.5, marginBottom: 2 }}>LAST {data.last5.length} MEETINGS</div>
+          {data.last5.map((m, i) => {
+            const hWon = m.homeScore > m.awayScore;
+            const aWon = m.awayScore > m.homeScore;
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                <span style={{ color: 'var(--text-muted)', minWidth: 70, fontSize: 9 }}>{m.date}</span>
+                <span style={{ fontWeight: 700, color: hWon ? '#10b981' : aWon ? '#ef4444' : 'var(--text-muted)', flex: 1, textAlign: 'right' }}>{home}</span>
+                <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 15, letterSpacing: 1, color: 'var(--gold)', margin: '0 4px' }}>{m.homeScore}–{m.awayScore}</span>
+                <span style={{ fontWeight: 700, color: aWon ? '#10b981' : hWon ? '#ef4444' : 'var(--text-muted)', flex: 1 }}>{away}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {edgeLabel && (
+        <div style={{ marginTop: 8, fontSize: 10, fontWeight: 700, color: color, textAlign: 'center' }}>
+          ⚖️ {edgeLabel} has the historical edge
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Team Detail Modal (bottom sheet) ────────────────────────────────────────
+function TeamDetailModal({ team, data, onClose }) {
+  if (!team) return null;
+
+  // Find which group this team belongs to
+  const hardcodedGroups = data?.hardcodedGroups ?? {};
+  const groupLetter = Object.keys(hardcodedGroups).find(l => hardcodedGroups[l].includes(team)) ?? '';
+  const color = GROUP_COLORS[groupLetter] ?? 'var(--gold)';
+
+  const allMatches = data?.groupMatchPredictions?.[groupLetter] ?? [];
+  const teamMatches = allMatches.filter(m => m.home === team || m.away === team);
+
+  const standings = data?.groupPredictedStandings?.[groupLetter] ?? [];
+  const rankEntry = standings.find(r => r.team === team);
+  const rank = standings.findIndex(r => r.team === team) + 1;
+
+  const reach = data?.tournamentReach?.[team];
+
+  const pathStages = [
+    { label: 'Advance',       key: 'pAdvance' },
+    { label: 'Round of 16',   key: 'pR16'     },
+    { label: 'Quarter-Final', key: 'pQF'      },
+    { label: 'Semi-Final',    key: 'pSF'      },
+    { label: 'Final',         key: 'pFinal'   },
+    { label: 'Champion',      key: 'pWinner'  },
+  ];
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position:        'fixed',
+        inset:           0,
+        zIndex:          1000,
+        background:      'rgba(0,0,0,0.65)',
+        display:         'flex',
+        alignItems:      'flex-end',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width:           '100%',
+          maxHeight:       '85vh',
+          background:      'var(--surface)',
+          borderRadius:    '18px 18px 0 0',
+          overflowY:       'auto',
+          display:         'flex',
+          flexDirection:   'column',
+        }}
+      >
+        {/* Sticky header */}
+        <div style={{
+          position:        'sticky',
+          top:             0,
+          zIndex:          1,
+          background:      'var(--surface)',
+          borderBottom:    `3px solid ${color}`,
+          padding:         '16px 16px 12px',
+          display:         'flex',
+          alignItems:      'center',
+          gap:             12,
+        }}>
+          <span style={{ fontSize: 36 }}>{flag(team)}</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, letterSpacing: 2, color, lineHeight: 1 }}>
+              {team}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, letterSpacing: 0.5 }}>
+              Group {groupLetter}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background:   'var(--surface2)',
+              border:       '1px solid var(--border)',
+              borderRadius: 8,
+              width:        32, height: 32,
+              fontSize:     16,
+              cursor:       'pointer',
+              color:        'var(--text-muted)',
+              display:      'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {/* Group matches */}
+          {teamMatches.length > 0 && (
+            <div className="card">
+              <div className="card-title">Group Matches</div>
+              {teamMatches.map((m, i) => {
+                const isHome   = m.home === team;
+                const opponent = isHome ? m.away : m.home;
+                const teamWin  = isHome ? m.homeWin : m.awayWin;
+                const oppWin   = isHome ? m.awayWin : m.homeWin;
+                const score    = m.predictedScore ?? '';
+                const [sh, sa] = score.split('-');
+                const dispScore = isHome ? `${sh}–${sa}` : `${sa}–${sh}`;
+                return (
+                  <div key={i} style={{
+                    padding:      '10px 0',
+                    borderBottom: i < teamMatches.length - 1 ? '1px solid var(--border)' : 'none',
+                    display:      'flex',
+                    alignItems:   'center',
+                    gap:          10,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+                      <span style={{ fontSize: 18 }}>{flag(opponent)}</span>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{opponent}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{isHome ? 'Home' : 'Away'}</div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 2, color: 'var(--gold)', lineHeight: 1 }}>
+                        {dispScore}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                        {pct(teamWin)} W · {pct(m.draw)} D
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Predicted standing */}
+          {rankEntry && (
+            <div className="card">
+              <div className="card-title">Predicted Standing</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '6px 0' }}>
+                <div style={{
+                  fontFamily:  'Bebas Neue, sans-serif',
+                  fontSize:    52,
+                  color,
+                  lineHeight:  1,
+                  minWidth:    40,
+                  textAlign:   'center',
+                }}>
+                  {rank}
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: rank <= 2 ? color : 'var(--text-muted)' }}>
+                    {rank <= 2 ? 'Predicted to advance' : 'Predicted to exit'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                    {rankEntry.xPts} xPts · {rankEntry.xGD > 0 ? '+' : ''}{rankEntry.xGD} xGD
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Path to the Final */}
+          {reach && (
+            <div className="card">
+              <div className="card-title">Path to the Final</div>
+              {pathStages.map(({ label, key }) => {
+                const prob = reach[key] ?? 0;
+                return (
+                  <div key={key} style={{
+                    display:      'flex',
+                    alignItems:   'center',
+                    gap:          10,
+                    padding:      '7px 0',
+                    borderBottom: key !== 'pWinner' ? '1px solid var(--border)' : 'none',
+                  }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)', minWidth: 100 }}>{label}</span>
+                    <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+                      <div style={{ width: `${prob * 100}%`, height: '100%', borderRadius: 3, background: color, transition: 'width 400ms' }} />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 700, color, minWidth: 38, textAlign: 'right' }}>
+                      {pct(prob)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Recent Form */}
+          <FormSection team={team} color={color} />
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Insights View ────────────────────────────────────────────────────────────
+function InsightsView({ data, onTeamClick }) {
+  const { groupInsights = [], upsetMatches = [] } = data;
+  // Which accordion sections are open (multiple can be open at once)
+  const [open, setOpen] = useState(new Set(['death']));
+
+  function toggle(id) {
+    setOpen(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  const LABEL_META = {
+    'Group of Death': { emoji: '💀', color: '#ef4444' },
+    'Tight Group':    { emoji: '🔥', color: '#f97316' },
+    'Balanced':       { emoji: '⚖️',  color: '#f59e0b' },
+    'Wide Open':      { emoji: '🌊', color: '#3b82f6' },
+    'Mismatch':       { emoji: '🎯', color: '#10b981' },
+  };
+
+  const UPSET_META = {
+    'Watch This':  { emoji: '👀', color: '#ef4444' },
+    'Upset Alert': { emoji: '⚡', color: '#f59e0b' },
+  };
+
+  // Reusable accordion header
+  function SectionHeader({ id, emoji, title, count, countColor }) {
+    const isOpen = open.has(id);
+    return (
+      <button
+        onClick={() => toggle(id)}
+        style={{
+          width:        '100%',
+          display:      'flex',
+          alignItems:   'center',
+          gap:          10,
+          padding:      '12px 14px',
+          background:   isOpen ? 'rgba(255,255,255,0.04)' : 'var(--surface2)',
+          border:       '1px solid var(--border)',
+          borderRadius: isOpen ? '10px 10px 0 0' : 10,
+          cursor:       'pointer',
+          textAlign:    'left',
+          color:        'var(--text-primary)',
+          transition:   'border-radius 150ms',
+        }}
+      >
+        <span style={{ fontSize: 18, lineHeight: 1 }}>{emoji}</span>
+        <span style={{ flex: 1, fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>{title}</span>
+        {count != null && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20,
+            background: `${countColor ?? 'var(--gold)'}22`,
+            border:     `1px solid ${countColor ?? 'var(--gold)'}55`,
+            color:      countColor ?? 'var(--gold)',
+          }}>
+            {count}
+          </span>
+        )}
+        <span style={{
+          fontSize: 13, color: 'var(--text-muted)',
+          transform: isOpen ? 'rotate(180deg)' : 'none',
+          transition: '200ms',
+          marginLeft: 2,
+        }}>▾</span>
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+      {/* ── Group of Death Rankings ─────────────────────────────────────────── */}
+      <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        <SectionHeader id="death" emoji="💀" title="Group of Death Rankings" count={`${groupInsights.length} groups`} countColor="#ef4444" />
+        {open.has('death') && (
+        <div style={{ background: 'var(--surface)', padding: '10px 10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {groupInsights.map((g, rank) => {
+            const groupColor = GROUP_COLORS[g.letter] ?? 'var(--gold)';
+            const meta       = LABEL_META[g.label] ?? { emoji: '📊', color: 'var(--gold)' };
+            const maxStrength = groupInsights.reduce((m, x) => Math.max(m, x.avg), 0);
+            const barPct      = maxStrength > 0 ? (g.avg / maxStrength) * 100 : 0;
+
+            return (
+              <div key={g.letter} className="card" style={{
+                borderLeft: `3px solid ${groupColor}`,
+                padding:    '12px 14px',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  {/* Rank */}
+                  <div style={{
+                    fontFamily:  'Bebas Neue, sans-serif',
+                    fontSize:    22,
+                    color:       rank === 0 ? meta.color : 'var(--text-muted)',
+                    minWidth:    24,
+                    textAlign:   'center',
+                  }}>
+                    {rank + 1}
+                  </div>
+                  {/* Group badge */}
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 6,
+                    background: `${groupColor}22`, border: `1.5px solid ${groupColor}55`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, color: groupColor,
+                    flexShrink: 0,
+                  }}>
+                    {g.letter}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: groupColor }}>Group {g.letter}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>
+                      {g.teamStrengths.map(t => `${flag(t.team)} ${t.team}`).join('  ·  ')}
+                    </div>
+                  </div>
+                  {/* Label badge */}
+                  <div style={{
+                    fontSize:    10, fontWeight: 700,
+                    background:  `${meta.color}22`,
+                    border:      `1px solid ${meta.color}55`,
+                    color:       meta.color,
+                    borderRadius: 6,
+                    padding:     '3px 8px',
+                    whiteSpace:  'nowrap',
+                  }}>
+                    {meta.emoji} {g.label}
+                  </div>
+                </div>
+
+                {/* Stats row */}
+                <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>AVG STRENGTH</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: groupColor }}>{g.avg}</div>
+                  </div>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>STRENGTH GAP</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{g.gap}</div>
+                  </div>
+                  <div style={{ flex: 1, textAlign: 'center' }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>SCORE</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: meta.color }}>{g.score}</div>
+                  </div>
+                </div>
+
+                {/* Strength bar per team */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {g.teamStrengths.map((t, ti) => {
+                    const tBarPct = g.teamStrengths[0].strength > 0 ? (t.strength / g.teamStrengths[0].strength) * 100 : 0;
+                    return (
+                      <div key={t.team} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 12, cursor: 'pointer' }} onClick={() => onTeamClick?.(t.team)}>{flag(t.team)}</span>
+                        <span style={{ fontSize: 11, fontWeight: 600, minWidth: 80, cursor: 'pointer' }} onClick={() => onTeamClick?.(t.team)}>
+                          {t.team}
+                        </span>
+                        <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+                          <div style={{ width: `${tBarPct}%`, height: '100%', borderRadius: 2, background: ti === 0 ? groupColor : `${groupColor}88` }} />
+                        </div>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 32, textAlign: 'right' }}>{t.strength}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        )}
+      </div>
+
+      {/* ── Upset Tracker ──────────────────────────────────────────────────── */}
+      <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        <SectionHeader id="upset" emoji="⚡" title="Upset Tracker" count={upsetMatches.length > 0 ? `${upsetMatches.length} flagged` : 'none'} countColor="#f59e0b" />
+        {open.has('upset') && (
+        <div style={{ background: 'var(--surface)', padding: '10px 10px 12px' }}>
+        {upsetMatches.length === 0 ? (
+          <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>
+            <div style={{ fontWeight: 600 }}>No major upsets predicted</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>All underdogs below 30% win probability</div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {upsetMatches.map((m, i) => {
+              const meta       = UPSET_META[m.label] ?? { emoji: '⚡', color: '#f59e0b' };
+              const groupColor = GROUP_COLORS[m.group] ?? 'var(--gold)';
+              const underdogPct = Math.round(m.underdogWin * 100);
+              const favPct      = Math.round((1 - m.underdogWin - m.draw) * 100);
+              const isHomeUnderdog = m.underdog === m.home;
+
+              return (
+                <div key={i} className="card" style={{
+                  borderLeft: `3px solid ${meta.color}`,
+                  padding:    '12px 14px',
+                }}>
+                  {/* Header row */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <div style={{
+                      width: 22, height: 22, borderRadius: 5,
+                      background: `${groupColor}22`, border: `1px solid ${groupColor}55`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontFamily: 'Bebas Neue, sans-serif', fontSize: 13, color: groupColor, flexShrink: 0,
+                    }}>
+                      {m.group}
+                    </div>
+                    <span style={{ flex: 1, fontSize: 11, color: 'var(--text-muted)' }}>Group {m.group}</span>
+                    <div style={{
+                      fontSize: 10, fontWeight: 700,
+                      background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
+                      color: meta.color, borderRadius: 6, padding: '2px 8px',
+                    }}>
+                      {meta.emoji} {m.label}
+                    </div>
+                  </div>
+
+                  {/* Match card */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    {/* Home */}
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{flag(m.home)}</span>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{m.home}</div>
+                        {!isHomeUnderdog && (
+                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--gold)', letterSpacing: 0.4 }}>FAVOURITE</div>
+                        )}
+                        {isHomeUnderdog && (
+                          <div style={{ fontSize: 9, fontWeight: 700, color: meta.color, letterSpacing: 0.4 }}>UNDERDOG</div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Predicted score */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 2, color: 'var(--gold)', lineHeight: 1 }}>
+                        {m.predictedScore.replace('-', '–')}
+                      </div>
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>PREDICTED</div>
+                    </div>
+
+                    {/* Away */}
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 5, justifyContent: 'flex-end' }}>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{m.away}</div>
+                        {isHomeUnderdog && (
+                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--gold)', letterSpacing: 0.4 }}>FAVOURITE</div>
+                        )}
+                        {!isHomeUnderdog && (
+                          <div style={{ fontSize: 9, fontWeight: 700, color: meta.color, letterSpacing: 0.4 }}>UNDERDOG</div>
+                        )}
+                      </div>
+                      <span style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{flag(m.away)}</span>
+                    </div>
+                  </div>
+
+                  {/* Probability bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', minWidth: 30, textAlign: 'left' }}>{favPct}%</span>
+                    <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden', display: 'flex' }}>
+                      <div style={{ width: `${favPct}%`, height: '100%', background: 'rgba(255,255,255,0.3)', borderRadius: '3px 0 0 3px' }} />
+                      <div style={{ width: `${Math.round(m.draw * 100)}%`, height: '100%', background: 'rgba(255,215,0,0.4)' }} />
+                      <div style={{ width: `${underdogPct}%`, height: '100%', background: meta.color, borderRadius: '0 3px 3px 0' }} />
+                    </div>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, minWidth: 30, textAlign: 'right' }}>{underdogPct}%</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'center' }}>
+                    <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                      {isHomeUnderdog ? m.home : m.away} underdog win probability: <strong style={{ color: meta.color }}>{underdogPct}%</strong>
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 8, fontStyle: 'italic' }}>
+          Flags matches where underdog win% ≥ 30% · Poisson model · read-only
+        </div>
+        </div>
+        )}
+      </div>
+
+      {/* ── Golden Boot Predictor ──────────────────────────────────────────── */}
+      <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        <SectionHeader id="boot" emoji="🥇" title="Golden Boot Predictor" count={data.goldenBoot?.length ? `Top ${data.goldenBoot.length}` : null} countColor="#fbbf24" />
+        {open.has('boot') && (
+        <div style={{ background: 'var(--surface)', padding: '10px 10px 12px' }}>
+        {(!data.goldenBoot || data.goldenBoot.length === 0) ? (
+          <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>⚽</div>
+            <div style={{ fontWeight: 600 }}>No data available</div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {data.goldenBoot.map((p, i) => {
+              const groupColor = (() => {
+                for (const [letter, teams] of Object.entries(data.hardcodedGroups ?? {})) {
+                  if (teams.includes(p.team)) return GROUP_COLORS[letter] ?? 'var(--gold)';
+                }
+                return 'var(--gold)';
+              })();
+              const maxGoals = data.goldenBoot[0]?.xGoals ?? 1;
+              const barPct   = maxGoals > 0 ? (p.xGoals / maxGoals) * 100 : 0;
+              const isTop3   = i < 3;
+              return (
+                <div key={i} className="card" style={{
+                  padding:    '10px 14px',
+                  borderLeft: isTop3 ? `3px solid ${i === 0 ? '#fbbf24' : i === 1 ? '#94a3b8' : '#b45309'}` : '3px solid var(--border)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <div style={{
+                      fontFamily: 'Bebas Neue, sans-serif', fontSize: 20,
+                      color: i === 0 ? '#fbbf24' : i === 1 ? '#94a3b8' : i === 2 ? '#b45309' : 'var(--text-muted)',
+                      minWidth: 24, textAlign: 'center',
+                    }}>
+                      {i + 1}
+                    </div>
+                    <span style={{ fontSize: 18 }}>{flag(p.team)}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{p.name}</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{p.team}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 1, color: i === 0 ? '#fbbf24' : groupColor, lineHeight: 1 }}>
+                        {p.xGoals}
+                      </div>
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>xG · {p.expGames} games</div>
+                    </div>
+                  </div>
+                  <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+                    <div style={{ width: `${barPct}%`, height: '100%', borderRadius: 2, background: i === 0 ? '#fbbf24' : groupColor }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 8, fontStyle: 'italic' }}>
+          Projected goals = team λ × expected games × player goal share · read-only
+        </div>
+        <div style={{
+          marginTop: 10,
+          padding:   '10px 12px',
+          borderRadius: 8,
+          background:  'rgba(255,215,0,0.06)',
+          border:      '1px solid rgba(255,215,0,0.18)',
+          fontSize:    10,
+          color:       'var(--text-muted)',
+          lineHeight:  1.5,
+        }}>
+          ℹ️ Player projections are based on current squad assumptions and will be updated once official World Cup squads are announced in May/June 2026. All players verified against the confirmed 48-team group draw.
+        </div>
+        </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Pre-tournament view — group draw with all match predictions pre-loaded
+function PreTournamentView({ data, onTeamClick }) {
+  const { hardcodedGroups, groupMatchPredictions, groupPredictedStandings } = data;
+  const [tab, setTab]           = useState('groups'); // 'groups' | 'table' | 'insights'
+  const [expandedGroup, setExpandedGroup] = useState(null);
+  const [expandedH2H, setExpandedH2H]    = useState(null); // 'A-0', 'B-2', etc.
+
+  const tabStyle = (id) => ({
+    flex: 1, padding: '8px 0', borderRadius: 8, fontWeight: 700, fontSize: 12,
+    border:     tab === id ? '1.5px solid var(--gold)' : '1px solid var(--border)',
+    background: tab === id ? 'rgba(255,215,0,0.1)'    : 'var(--surface2)',
+    color:      tab === id ? 'var(--gold)'             : 'var(--text-primary)',
+    cursor:     'pointer',
+  });
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        <button style={tabStyle('groups')}   onClick={() => setTab('groups')}>Groups</button>
+        <button style={tabStyle('table')}    onClick={() => setTab('table')}>Table</button>
+        <button style={tabStyle('insights')} onClick={() => setTab('insights')}>Insights</button>
+      </div>
+
+      {tab === 'table' ? (
+        <PredictedTableView data={data} onTeamClick={onTeamClick} />
+      ) : tab === 'insights' ? (
+        <InsightsView data={data} onTeamClick={onTeamClick} />
+      ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {Object.entries(hardcodedGroups).map(([letter, teams]) => {
+        const matches  = groupMatchPredictions?.[letter] ?? [];
+        const isOpen   = expandedGroup === letter;
+        const color    = GROUP_COLORS[letter] ?? 'var(--gold)';
+
+        return (
+          <div key={letter} className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${color}` }}>
+            <button
+              onClick={() => setExpandedGroup(isOpen ? null : letter)}
+              style={{
+                width:       '100%',
+                background:  'transparent',
+                border:      'none',
+                padding:     '12px 14px',
+                display:     'flex',
+                alignItems:  'center',
+                cursor:      'pointer',
+                gap:         10,
+              }}
+            >
+              <div style={{
+                width: 32, height: 32, borderRadius: 8,
+                background:  `${color}22`,
+                border:      `1.5px solid ${color}55`,
+                display:     'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily:  'Bebas Neue, sans-serif', fontSize: 18, color,
+                flexShrink:  0,
+              }}>
+                {letter}
+              </div>
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color }}>Group {letter}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                  {teams.map(t => `${flag(t)} ${t}`).join('  ·  ')}
+                </div>
+              </div>
+              <div style={{ fontSize: 14, color: 'var(--text-muted)', transform: isOpen ? 'rotate(180deg)' : 'none', transition: '200ms' }}>▾</div>
+            </button>
+
+            {isOpen && (
+              <div style={{ padding: '0 14px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+                {matches.map((m, i) => {
+                  const favours = m.homeWin > m.awayWin && m.homeWin > m.draw ? 'home'
+                                : m.awayWin > m.homeWin && m.awayWin > m.draw ? 'away'
+                                : 'draw';
+                  const accent  = favours === 'home' ? 'var(--blue)'
+                                : favours === 'away' ? 'var(--gold)'
+                                : 'rgba(255,255,255,0.2)';
+                  return (
+                    <div key={i} style={{
+                      background:   'var(--surface2)',
+                      borderRadius: 10,
+                      border:       '1px solid var(--border)',
+                      borderLeft:   `3px solid ${accent}`,
+                      padding:      '10px 12px',
+                    }}>
+                      {/* Teams row */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                        <span style={{ fontSize: 16, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{flag(m.home)}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, flex: 1, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{m.home}</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>vs</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, flex: 1, textAlign: 'right', cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{m.away}</span>
+                        <span style={{ fontSize: 16, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{flag(m.away)}</span>
+                      </div>
+
+                      {/* Score + probabilities */}
+                      <div style={{
+                        borderTop:    '1px solid var(--border)',
+                        borderBottom: '1px solid var(--border)',
+                        padding:      '7px 0',
+                        display:      'flex',
+                        alignItems:   'center',
+                        justifyContent: 'space-between',
+                        gap:          6,
+                      }}>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>HOME WIN</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: favours === 'home' ? 'var(--blue)' : 'var(--text-muted)' }}>{pct(m.homeWin)}</div>
+                        </div>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>PREDICTED</div>
+                          <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 2, color: 'var(--gold)', lineHeight: 1 }}>
+                            {m.predictedScore.replace('-', '–')}
+                          </div>
+                        </div>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>AWAY WIN</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: favours === 'away' ? 'var(--gold)' : 'var(--text-muted)' }}>{pct(m.awayWin)}</div>
+                        </div>
+                      </div>
+
+                      {/* Draw bar */}
+                      <div style={{ marginTop: 7, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                          <div style={{ width: `${m.homeWin * 100}%`, height: '100%', background: 'var(--blue)', borderRadius: 2 }} />
+                        </div>
+                        <span style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{pct(m.draw)} draw</span>
+                        <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                          <div style={{ width: `${m.awayWin * 100}%`, height: '100%', background: 'var(--gold)', borderRadius: 2, marginLeft: 'auto' }} />
+                        </div>
+                      </div>
+
+                      {/* H2H toggle */}
+                      {(() => {
+                        const key = `${letter}-${i}`;
+                        const open = expandedH2H === key;
+                        return (
+                          <>
+                            <button
+                              onClick={() => setExpandedH2H(open ? null : key)}
+                              style={{
+                                marginTop: 8, width: '100%', background: 'transparent',
+                                border: `1px solid ${color}44`, borderRadius: 6,
+                                padding: '4px 0', fontSize: 10, fontWeight: 700,
+                                color: open ? color : 'var(--text-muted)', cursor: 'pointer',
+                              }}
+                            >
+                              {open ? '▲ Hide H2H' : '▼ Head to Head'}
+                            </button>
+                            {open && <H2HPanel home={m.home} away={m.away} color={color} />}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Disclaimer Modal (shown once on first visit) ─────────────────────────────
+function DisclaimerModal({ onDismiss }) {
+  return (
+    <div
+      style={{
+        position:   'fixed',
+        inset:       0,
+        zIndex:      2000,
+        background:  'rgba(0,0,0,0.72)',
+        display:     'flex',
+        alignItems:  'center',
+        justifyContent: 'center',
+        padding:     '0 20px',
+      }}
+    >
+      <div style={{
+        width:        '100%',
+        maxWidth:     360,
+        background:   'var(--surface)',
+        borderRadius: 18,
+        border:       '1px solid var(--border)',
+        overflow:     'hidden',
+        boxShadow:    '0 24px 64px rgba(0,0,0,0.6)',
+      }}>
+        {/* Gold accent bar */}
+        <div style={{ height: 4, background: 'linear-gradient(90deg, var(--gold), #fb923c)' }} />
+
+        <div style={{ padding: '24px 20px 20px' }}>
+          {/* Icon + title */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <span style={{ fontSize: 36, lineHeight: 1 }}>⚽</span>
+            <div>
+              <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: 1.5, color: 'var(--gold)', lineHeight: 1 }}>
+                JUST FOR FUN
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>World Cup 2026 Predictor</div>
+            </div>
+          </div>
+
+          {/* Body text */}
+          <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.65, margin: '0 0 10px' }}>
+            This is a <strong>fun prediction tool for entertainment purposes only.</strong> All forecasts are generated by a statistical model (Poisson + Monte Carlo) and are not intended as betting advice.
+          </p>
+          <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.65, margin: '0 0 20px' }}>
+            Enjoy the tournament! 🏆🌍
+          </p>
+
+          {/* Dismiss button */}
+          <button
+            onClick={onDismiss}
+            style={{
+              width:        '100%',
+              padding:      '11px 0',
+              borderRadius: 10,
+              background:   'var(--gold)',
+              border:       'none',
+              color:        '#000',
+              fontWeight:   800,
+              fontSize:     14,
+              letterSpacing: 0.5,
+              cursor:       'pointer',
+            }}
+          >
+            Got it, let's go!
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
+export default function WorldCup() {
+  const { data, loading, error } = useWCTournament();
+  const [view, setView]          = useState('groups'); // 'groups' | 'knockout'
+  const [selectedTeam, setSelectedTeam] = useState(null);
+  const [showDisclaimer, setShowDisclaimer] = useState(() => {
+    try { return !localStorage.getItem('wc_disclaimer_seen'); } catch { return false; }
+  });
+
+  function dismissDisclaimer() {
+    try { localStorage.setItem('wc_disclaimer_seen', '1'); } catch {}
+    setShowDisclaimer(false);
+  }
+
+  if (loading) {
+    return <div className="loading-card"><div className="spinner" /><div>Loading World Cup data…</div></div>;
+  }
+
+  if (error && !data) {
+    return (
+      <div className="card" style={{ textAlign: 'center', color: 'var(--red)', padding: 40 }}>
+        <div style={{ fontWeight: 600 }}>Failed to load</div>
+        <div style={{ fontSize: 12, marginTop: 4, color: 'var(--text-muted)' }}>{error}</div>
+      </div>
+    );
+  }
+
+  const phase          = data?.phase ?? 'PRE_TOURNAMENT';
+  const hasApiData     = data?.hasLiveData && (data.groupFixtures?.length > 0 || data.knockoutFixtures?.length > 0);
+  const knockoutPhases = ['ROUND_OF_32','ROUND_OF_16','QUARTER_FINALS','SEMI_FINALS','FINAL','COMPLETE'];
+  const isKnockout     = knockoutPhases.includes(phase);
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="hero-card" style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 28 }}>🌍</span>
+          <div>
+            <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, letterSpacing: 2, lineHeight: 1 }}>
+              FIFA WORLD CUP 2026
+            </div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', letterSpacing: 1 }}>
+              USA · CANADA · MEXICO
+            </div>
+          </div>
+        </div>
+        <PhaseBadge phase={phase} />
+      </div>
+
+      {/* Tab switcher — only shown once live data is available */}
+      {hasApiData && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          {[
+            { id: 'groups',   label: 'Groups' },
+            { id: 'knockout', label: 'Knockout', disabled: !isKnockout && !data?.knockoutFixtures?.length },
+          ].map(({ id, label, disabled }) => (
+            <button
+              key={id}
+              disabled={disabled}
+              onClick={() => setView(id)}
+              style={{
+                flex:         1,
+                padding:      '8px 0',
+                borderRadius: 8,
+                border:       view === id ? '1.5px solid var(--gold)' : '1px solid var(--border)',
+                background:   view === id ? 'rgba(255,215,0,0.1)' : 'var(--surface2)',
+                color:        view === id ? 'var(--gold)' : disabled ? 'var(--text-muted)' : 'var(--text-primary)',
+                fontWeight:   700,
+                fontSize:     13,
+                cursor:       disabled ? 'not-allowed' : 'pointer',
+                opacity:      disabled ? 0.5 : 1,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Content */}
+      {!hasApiData ? (
+        <PreTournamentView data={{ hardcodedGroups: {}, phase: 'PRE_TOURNAMENT', ...data }} onTeamClick={setSelectedTeam} />
+      ) : view === 'groups' ? (
+        <GroupStageView data={data} />
+      ) : (
+        <KnockoutView data={data} />
+      )}
+
+      {/* Team detail modal */}
+      {selectedTeam && (
+        <TeamDetailModal
+          team={selectedTeam}
+          data={data}
+          onClose={() => setSelectedTeam(null)}
+        />
+      )}
+
+      {/* One-time disclaimer */}
+      {showDisclaimer && <DisclaimerModal onDismiss={dismissDisclaimer} />}
+    </div>
+  );
+}
