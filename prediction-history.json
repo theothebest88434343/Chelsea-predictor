@@ -1933,7 +1933,11 @@
         }
       },
       "trackedAt": "2026-05-14T23:40:57.891Z",
-      "result": null
+      "result": {
+        "homeGoals": 3,
+        "awayGoals": 1,
+        "settledAt": "2026-05-17T19:20:40.055Z"
+      }
     },
     {
       "fixtureId": 361,

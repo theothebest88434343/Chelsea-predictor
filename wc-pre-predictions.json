@@ -1,0 +1,1015 @@
+{
+  "savedAt": "2026-05-17T19:23:30.171Z",
+  "groupMatchPredictions": {
+    "A": [
+      {
+        "home": "USA",
+        "away": "Panama",
+        "homeWin": 0.51554,
+        "draw": 0.24698,
+        "awayWin": 0.23748,
+        "lambdaHome": 1.64,
+        "lambdaAway": 1.03,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "USA",
+        "away": "Bolivia",
+        "homeWin": 0.68854,
+        "draw": 0.19054,
+        "awayWin": 0.12092,
+        "lambdaHome": 2.16,
+        "lambdaAway": 0.78,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "USA",
+        "away": "South Africa",
+        "homeWin": 0.57606,
+        "draw": 0.2297,
+        "awayWin": 0.19424,
+        "lambdaHome": 1.79,
+        "lambdaAway": 0.94,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Panama",
+        "away": "Bolivia",
+        "homeWin": 0.54462,
+        "draw": 0.2418,
+        "awayWin": 0.21358,
+        "lambdaHome": 1.71,
+        "lambdaAway": 0.99,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Panama",
+        "away": "South Africa",
+        "homeWin": 0.42788,
+        "draw": 0.25774,
+        "awayWin": 0.31438,
+        "lambdaHome": 1.42,
+        "lambdaAway": 1.19,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Bolivia",
+        "away": "South Africa",
+        "homeWin": 0.26214,
+        "draw": 0.25246,
+        "awayWin": 0.4854,
+        "lambdaHome": 1.08,
+        "lambdaAway": 1.56,
+        "predictedScore": "1-1"
+      }
+    ],
+    "B": [
+      {
+        "home": "Mexico",
+        "away": "South Korea",
+        "homeWin": 0.43318,
+        "draw": 0.25794,
+        "awayWin": 0.30888,
+        "lambdaHome": 1.44,
+        "lambdaAway": 1.17,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Mexico",
+        "away": "Cuba",
+        "homeWin": 0.80274,
+        "draw": 0.1334,
+        "awayWin": 0.06386,
+        "lambdaHome": 2.66,
+        "lambdaAway": 0.64,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Mexico",
+        "away": "Jamaica",
+        "homeWin": 0.56678,
+        "draw": 0.23132,
+        "awayWin": 0.2019,
+        "lambdaHome": 1.77,
+        "lambdaAway": 0.96,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "South Korea",
+        "away": "Cuba",
+        "homeWin": 0.7474,
+        "draw": 0.16052,
+        "awayWin": 0.09208,
+        "lambdaHome": 2.39,
+        "lambdaAway": 0.71,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "South Korea",
+        "away": "Jamaica",
+        "homeWin": 0.49678,
+        "draw": 0.25066,
+        "awayWin": 0.25256,
+        "lambdaHome": 1.59,
+        "lambdaAway": 1.06,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Cuba",
+        "away": "Jamaica",
+        "homeWin": 0.1595,
+        "draw": 0.21468,
+        "awayWin": 0.62582,
+        "lambdaHome": 0.87,
+        "lambdaAway": 1.95,
+        "predictedScore": "0-1"
+      }
+    ],
+    "C": [
+      {
+        "home": "Canada",
+        "away": "Uruguay",
+        "homeWin": 0.34332,
+        "draw": 0.26252,
+        "awayWin": 0.39416,
+        "lambdaHome": 1.24,
+        "lambdaAway": 1.36,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Canada",
+        "away": "Mali",
+        "homeWin": 0.62334,
+        "draw": 0.21244,
+        "awayWin": 0.16422,
+        "lambdaHome": 1.94,
+        "lambdaAway": 0.87,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Canada",
+        "away": "Uzbekistan",
+        "homeWin": 0.71364,
+        "draw": 0.1765,
+        "awayWin": 0.10986,
+        "lambdaHome": 2.25,
+        "lambdaAway": 0.75,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Uruguay",
+        "away": "Mali",
+        "homeWin": 0.65072,
+        "draw": 0.20496,
+        "awayWin": 0.14432,
+        "lambdaHome": 2.02,
+        "lambdaAway": 0.83,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Uruguay",
+        "away": "Uzbekistan",
+        "homeWin": 0.74036,
+        "draw": 0.1643,
+        "awayWin": 0.09534,
+        "lambdaHome": 2.35,
+        "lambdaAway": 0.72,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Mali",
+        "away": "Uzbekistan",
+        "homeWin": 0.46666,
+        "draw": 0.25482,
+        "awayWin": 0.27852,
+        "lambdaHome": 1.51,
+        "lambdaAway": 1.12,
+        "predictedScore": "1-1"
+      }
+    ],
+    "D": [
+      {
+        "home": "Spain",
+        "away": "Japan",
+        "homeWin": 0.5928,
+        "draw": 0.22216,
+        "awayWin": 0.18504,
+        "lambdaHome": 1.85,
+        "lambdaAway": 0.91,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Spain",
+        "away": "Kenya",
+        "homeWin": 0.8733,
+        "draw": 0.09152,
+        "awayWin": 0.03518,
+        "lambdaHome": 3.15,
+        "lambdaAway": 0.54,
+        "predictedScore": "3-0"
+      },
+      {
+        "home": "Spain",
+        "away": "Trinidad & Tobago",
+        "homeWin": 0.92072,
+        "draw": 0.05882,
+        "awayWin": 0.02046,
+        "lambdaHome": 3.62,
+        "lambdaAway": 0.47,
+        "predictedScore": "3-0"
+      },
+      {
+        "home": "Japan",
+        "away": "Kenya",
+        "homeWin": 0.70868,
+        "draw": 0.1789,
+        "awayWin": 0.11242,
+        "lambdaHome": 2.22,
+        "lambdaAway": 0.76,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Japan",
+        "away": "Trinidad & Tobago",
+        "homeWin": 0.77934,
+        "draw": 0.14434,
+        "awayWin": 0.07632,
+        "lambdaHome": 2.54,
+        "lambdaAway": 0.66,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Kenya",
+        "away": "Trinidad & Tobago",
+        "homeWin": 0.4551,
+        "draw": 0.25386,
+        "awayWin": 0.29104,
+        "lambdaHome": 1.49,
+        "lambdaAway": 1.13,
+        "predictedScore": "1-1"
+      }
+    ],
+    "E": [
+      {
+        "home": "Germany",
+        "away": "Colombia",
+        "homeWin": 0.48356,
+        "draw": 0.2529,
+        "awayWin": 0.26354,
+        "lambdaHome": 1.55,
+        "lambdaAway": 1.09,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Germany",
+        "away": "Ecuador",
+        "homeWin": 0.5135,
+        "draw": 0.246,
+        "awayWin": 0.2405,
+        "lambdaHome": 1.64,
+        "lambdaAway": 1.03,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Germany",
+        "away": "Indonesia",
+        "homeWin": 0.8955,
+        "draw": 0.07644,
+        "awayWin": 0.02806,
+        "lambdaHome": 3.34,
+        "lambdaAway": 0.51,
+        "predictedScore": "3-0"
+      },
+      {
+        "home": "Colombia",
+        "away": "Ecuador",
+        "homeWin": 0.4013,
+        "draw": 0.26496,
+        "awayWin": 0.33374,
+        "lambdaHome": 1.37,
+        "lambdaAway": 1.23,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Colombia",
+        "away": "Indonesia",
+        "homeWin": 0.82472,
+        "draw": 0.11978,
+        "awayWin": 0.0555,
+        "lambdaHome": 2.79,
+        "lambdaAway": 0.61,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Ecuador",
+        "away": "Indonesia",
+        "homeWin": 0.80206,
+        "draw": 0.13392,
+        "awayWin": 0.06402,
+        "lambdaHome": 2.64,
+        "lambdaAway": 0.64,
+        "predictedScore": "2-0"
+      }
+    ],
+    "F": [
+      {
+        "home": "Portugal",
+        "away": "Argentina",
+        "homeWin": 0.20864,
+        "draw": 0.23624,
+        "awayWin": 0.55512,
+        "lambdaHome": 0.97,
+        "lambdaAway": 1.74,
+        "predictedScore": "0-1"
+      },
+      {
+        "home": "Portugal",
+        "away": "Algeria",
+        "homeWin": 0.6905,
+        "draw": 0.18648,
+        "awayWin": 0.12302,
+        "lambdaHome": 2.16,
+        "lambdaAway": 0.78,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Portugal",
+        "away": "New Zealand",
+        "homeWin": 0.82016,
+        "draw": 0.12148,
+        "awayWin": 0.05836,
+        "lambdaHome": 2.76,
+        "lambdaAway": 0.61,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Argentina",
+        "away": "Algeria",
+        "homeWin": 0.83888,
+        "draw": 0.11122,
+        "awayWin": 0.0499,
+        "lambdaHome": 2.89,
+        "lambdaAway": 0.59,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Argentina",
+        "away": "New Zealand",
+        "homeWin": 0.9245,
+        "draw": 0.05586,
+        "awayWin": 0.01964,
+        "lambdaHome": 3.7,
+        "lambdaAway": 0.46,
+        "predictedScore": "3-0"
+      },
+      {
+        "home": "Algeria",
+        "away": "New Zealand",
+        "homeWin": 0.52632,
+        "draw": 0.2437,
+        "awayWin": 0.22998,
+        "lambdaHome": 1.67,
+        "lambdaAway": 1.01,
+        "predictedScore": "1-1"
+      }
+    ],
+    "G": [
+      {
+        "home": "France",
+        "away": "Belgium",
+        "homeWin": 0.55622,
+        "draw": 0.23966,
+        "awayWin": 0.20412,
+        "lambdaHome": 1.75,
+        "lambdaAway": 0.96,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "France",
+        "away": "Brazil",
+        "homeWin": 0.47056,
+        "draw": 0.25724,
+        "awayWin": 0.2722,
+        "lambdaHome": 1.53,
+        "lambdaAway": 1.1,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "France",
+        "away": "Honduras",
+        "homeWin": 0.80968,
+        "draw": 0.1288,
+        "awayWin": 0.06152,
+        "lambdaHome": 2.7,
+        "lambdaAway": 0.63,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Belgium",
+        "away": "Brazil",
+        "homeWin": 0.28928,
+        "draw": 0.25976,
+        "awayWin": 0.45096,
+        "lambdaHome": 1.14,
+        "lambdaAway": 1.49,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Belgium",
+        "away": "Honduras",
+        "homeWin": 0.64668,
+        "draw": 0.2045,
+        "awayWin": 0.14882,
+        "lambdaHome": 2,
+        "lambdaAway": 0.84,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Brazil",
+        "away": "Honduras",
+        "homeWin": 0.72152,
+        "draw": 0.1745,
+        "awayWin": 0.10398,
+        "lambdaHome": 2.29,
+        "lambdaAway": 0.74,
+        "predictedScore": "2-0"
+      }
+    ],
+    "H": [
+      {
+        "home": "England",
+        "away": "Netherlands",
+        "homeWin": 0.4849,
+        "draw": 0.25156,
+        "awayWin": 0.26354,
+        "lambdaHome": 1.56,
+        "lambdaAway": 1.08,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "England",
+        "away": "Senegal",
+        "homeWin": 0.62512,
+        "draw": 0.21218,
+        "awayWin": 0.1627,
+        "lambdaHome": 1.94,
+        "lambdaAway": 0.87,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "England",
+        "away": "Ukraine",
+        "homeWin": 0.82372,
+        "draw": 0.1183,
+        "awayWin": 0.05798,
+        "lambdaHome": 2.79,
+        "lambdaAway": 0.61,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Netherlands",
+        "away": "Senegal",
+        "homeWin": 0.505,
+        "draw": 0.2466,
+        "awayWin": 0.2484,
+        "lambdaHome": 1.62,
+        "lambdaAway": 1.04,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Netherlands",
+        "away": "Ukraine",
+        "homeWin": 0.735,
+        "draw": 0.16782,
+        "awayWin": 0.09718,
+        "lambdaHome": 2.33,
+        "lambdaAway": 0.73,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Senegal",
+        "away": "Ukraine",
+        "homeWin": 0.5999,
+        "draw": 0.22312,
+        "awayWin": 0.17698,
+        "lambdaHome": 1.87,
+        "lambdaAway": 0.9,
+        "predictedScore": "1-0"
+      }
+    ],
+    "I": [
+      {
+        "home": "Morocco",
+        "away": "Croatia",
+        "homeWin": 0.36396,
+        "draw": 0.26368,
+        "awayWin": 0.37236,
+        "lambdaHome": 1.29,
+        "lambdaAway": 1.31,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Morocco",
+        "away": "Denmark",
+        "homeWin": 0.47628,
+        "draw": 0.2521,
+        "awayWin": 0.27162,
+        "lambdaHome": 1.55,
+        "lambdaAway": 1.09,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Morocco",
+        "away": "Nigeria",
+        "homeWin": 0.5827,
+        "draw": 0.22836,
+        "awayWin": 0.18894,
+        "lambdaHome": 1.82,
+        "lambdaAway": 0.93,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Croatia",
+        "away": "Denmark",
+        "homeWin": 0.48524,
+        "draw": 0.25116,
+        "awayWin": 0.2636,
+        "lambdaHome": 1.56,
+        "lambdaAway": 1.08,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Croatia",
+        "away": "Nigeria",
+        "homeWin": 0.58954,
+        "draw": 0.22712,
+        "awayWin": 0.18334,
+        "lambdaHome": 1.84,
+        "lambdaAway": 0.92,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Denmark",
+        "away": "Nigeria",
+        "homeWin": 0.47228,
+        "draw": 0.25426,
+        "awayWin": 0.27346,
+        "lambdaHome": 1.53,
+        "lambdaAway": 1.11,
+        "predictedScore": "1-1"
+      }
+    ],
+    "J": [
+      {
+        "home": "Italy",
+        "away": "Australia",
+        "homeWin": 0.51196,
+        "draw": 0.24712,
+        "awayWin": 0.24092,
+        "lambdaHome": 1.62,
+        "lambdaAway": 1.04,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Italy",
+        "away": "Ghana",
+        "homeWin": 0.5834,
+        "draw": 0.2263,
+        "awayWin": 0.1903,
+        "lambdaHome": 1.82,
+        "lambdaAway": 0.93,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Italy",
+        "away": "DR Congo",
+        "homeWin": 0.7753,
+        "draw": 0.14698,
+        "awayWin": 0.07772,
+        "lambdaHome": 2.52,
+        "lambdaAway": 0.67,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Australia",
+        "away": "Ghana",
+        "homeWin": 0.43976,
+        "draw": 0.25666,
+        "awayWin": 0.30358,
+        "lambdaHome": 1.46,
+        "lambdaAway": 1.16,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Australia",
+        "away": "DR Congo",
+        "homeWin": 0.65022,
+        "draw": 0.20408,
+        "awayWin": 0.1457,
+        "lambdaHome": 2.02,
+        "lambdaAway": 0.84,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Ghana",
+        "away": "DR Congo",
+        "homeWin": 0.57766,
+        "draw": 0.23014,
+        "awayWin": 0.1922,
+        "lambdaHome": 1.8,
+        "lambdaAway": 0.94,
+        "predictedScore": "1-0"
+      }
+    ],
+    "K": [
+      {
+        "home": "Iran",
+        "away": "Switzerland",
+        "homeWin": 0.34974,
+        "draw": 0.259,
+        "awayWin": 0.39126,
+        "lambdaHome": 1.26,
+        "lambdaAway": 1.34,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Iran",
+        "away": "Venezuela",
+        "homeWin": 0.65354,
+        "draw": 0.20132,
+        "awayWin": 0.14514,
+        "lambdaHome": 2.03,
+        "lambdaAway": 0.83,
+        "predictedScore": "1-0"
+      },
+      {
+        "home": "Iran",
+        "away": "Cameroon",
+        "homeWin": 0.43516,
+        "draw": 0.25994,
+        "awayWin": 0.3049,
+        "lambdaHome": 1.44,
+        "lambdaAway": 1.17,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Switzerland",
+        "away": "Venezuela",
+        "homeWin": 0.67678,
+        "draw": 0.19326,
+        "awayWin": 0.12996,
+        "lambdaHome": 2.1,
+        "lambdaAway": 0.81,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Switzerland",
+        "away": "Cameroon",
+        "homeWin": 0.45392,
+        "draw": 0.25666,
+        "awayWin": 0.28942,
+        "lambdaHome": 1.49,
+        "lambdaAway": 1.13,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Venezuela",
+        "away": "Cameroon",
+        "homeWin": 0.18766,
+        "draw": 0.2245,
+        "awayWin": 0.58784,
+        "lambdaHome": 0.92,
+        "lambdaAway": 1.83,
+        "predictedScore": "0-1"
+      }
+    ],
+    "L": [
+      {
+        "home": "Serbia",
+        "away": "Turkey",
+        "homeWin": 0.3851,
+        "draw": 0.26286,
+        "awayWin": 0.35204,
+        "lambdaHome": 1.34,
+        "lambdaAway": 1.26,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Serbia",
+        "away": "Saudi Arabia",
+        "homeWin": 0.42608,
+        "draw": 0.26386,
+        "awayWin": 0.31006,
+        "lambdaHome": 1.43,
+        "lambdaAway": 1.18,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Serbia",
+        "away": "Uganda",
+        "homeWin": 0.69266,
+        "draw": 0.18472,
+        "awayWin": 0.12262,
+        "lambdaHome": 2.16,
+        "lambdaAway": 0.78,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Turkey",
+        "away": "Saudi Arabia",
+        "homeWin": 0.40948,
+        "draw": 0.26256,
+        "awayWin": 0.32796,
+        "lambdaHome": 1.38,
+        "lambdaAway": 1.22,
+        "predictedScore": "1-1"
+      },
+      {
+        "home": "Turkey",
+        "away": "Uganda",
+        "homeWin": 0.67032,
+        "draw": 0.19484,
+        "awayWin": 0.13484,
+        "lambdaHome": 2.09,
+        "lambdaAway": 0.81,
+        "predictedScore": "2-0"
+      },
+      {
+        "home": "Saudi Arabia",
+        "away": "Uganda",
+        "homeWin": 0.62952,
+        "draw": 0.21266,
+        "awayWin": 0.15782,
+        "lambdaHome": 1.96,
+        "lambdaAway": 0.86,
+        "predictedScore": "1-0"
+      }
+    ]
+  },
+  "groupPredictedStandings": {
+    "A": [
+      {
+        "team": "USA",
+        "xPts": 6,
+        "xGD": 2.84
+      },
+      {
+        "team": "Panama",
+        "xPts": 4,
+        "xGD": 0.34
+      },
+      {
+        "team": "South Africa",
+        "xPts": 3,
+        "xGD": -0.6
+      },
+      {
+        "team": "Bolivia",
+        "xPts": 2,
+        "xGD": -2.58
+      }
+    ],
+    "B": [
+      {
+        "team": "Mexico",
+        "xPts": 6,
+        "xGD": 3.1
+      },
+      {
+        "team": "South Korea",
+        "xPts": 5,
+        "xGD": 1.94
+      },
+      {
+        "team": "Jamaica",
+        "xPts": 3,
+        "xGD": -0.26
+      },
+      {
+        "team": "Cuba",
+        "xPts": 1,
+        "xGD": -4.78
+      }
+    ],
+    "C": [
+      {
+        "team": "Uruguay",
+        "xPts": 5,
+        "xGD": 2.94
+      },
+      {
+        "team": "Canada",
+        "xPts": 5,
+        "xGD": 2.45
+      },
+      {
+        "team": "Mali",
+        "xPts": 2,
+        "xGD": -1.87
+      },
+      {
+        "team": "Uzbekistan",
+        "xPts": 2,
+        "xGD": -3.52
+      }
+    ],
+    "D": [
+      {
+        "team": "Spain",
+        "xPts": 7,
+        "xGD": 6.7
+      },
+      {
+        "team": "Japan",
+        "xPts": 5,
+        "xGD": 2.4
+      },
+      {
+        "team": "Kenya",
+        "xPts": 2,
+        "xGD": -3.71
+      },
+      {
+        "team": "Trinidad & Tobago",
+        "xPts": 1,
+        "xGD": -5.39
+      }
+    ],
+    "E": [
+      {
+        "team": "Germany",
+        "xPts": 6,
+        "xGD": 3.9
+      },
+      {
+        "team": "Colombia",
+        "xPts": 5,
+        "xGD": 1.86
+      },
+      {
+        "team": "Ecuador",
+        "xPts": 4,
+        "xGD": 1.25
+      },
+      {
+        "team": "Indonesia",
+        "xPts": 0,
+        "xGD": -7.01
+      }
+    ],
+    "F": [
+      {
+        "team": "Argentina",
+        "xPts": 7,
+        "xGD": 6.31
+      },
+      {
+        "team": "Portugal",
+        "xPts": 5,
+        "xGD": 2.76
+      },
+      {
+        "team": "Algeria",
+        "xPts": 2,
+        "xGD": -3.02
+      },
+      {
+        "team": "New Zealand",
+        "xPts": 1,
+        "xGD": -6.05
+      }
+    ],
+    "G": [
+      {
+        "team": "France",
+        "xPts": 6,
+        "xGD": 3.29
+      },
+      {
+        "team": "Brazil",
+        "xPts": 5,
+        "xGD": 1.47
+      },
+      {
+        "team": "Belgium",
+        "xPts": 4,
+        "xGD": 0.02
+      },
+      {
+        "team": "Honduras",
+        "xPts": 1,
+        "xGD": -4.78
+      }
+    ],
+    "H": [
+      {
+        "team": "England",
+        "xPts": 6,
+        "xGD": 3.73
+      },
+      {
+        "team": "Netherlands",
+        "xPts": 5,
+        "xGD": 1.7
+      },
+      {
+        "team": "Senegal",
+        "xPts": 3,
+        "xGD": -0.68
+      },
+      {
+        "team": "Ukraine",
+        "xPts": 1,
+        "xGD": -4.75
+      }
+    ],
+    "I": [
+      {
+        "team": "Croatia",
+        "xPts": 5,
+        "xGD": 1.42
+      },
+      {
+        "team": "Morocco",
+        "xPts": 5,
+        "xGD": 1.33
+      },
+      {
+        "team": "Denmark",
+        "xPts": 3,
+        "xGD": -0.52
+      },
+      {
+        "team": "Nigeria",
+        "xPts": 2,
+        "xGD": -2.23
+      }
+    ],
+    "J": [
+      {
+        "team": "Italy",
+        "xPts": 6,
+        "xGD": 3.32
+      },
+      {
+        "team": "Australia",
+        "xPts": 4,
+        "xGD": 0.9
+      },
+      {
+        "team": "Ghana",
+        "xPts": 3,
+        "xGD": -0.33
+      },
+      {
+        "team": "DR Congo",
+        "xPts": 1,
+        "xGD": -3.89
+      }
+    ],
+    "K": [
+      {
+        "team": "Switzerland",
+        "xPts": 5,
+        "xGD": 1.73
+      },
+      {
+        "team": "Iran",
+        "xPts": 5,
+        "xGD": 1.39
+      },
+      {
+        "team": "Cameroon",
+        "xPts": 4,
+        "xGD": 0.28
+      },
+      {
+        "team": "Venezuela",
+        "xPts": 2,
+        "xGD": -3.4
+      }
+    ],
+    "L": [
+      {
+        "team": "Serbia",
+        "xPts": 5,
+        "xGD": 1.71
+      },
+      {
+        "team": "Turkey",
+        "xPts": 5,
+        "xGD": 1.36
+      },
+      {
+        "team": "Saudi Arabia",
+        "xPts": 4,
+        "xGD": 0.69
+      },
+      {
+        "team": "Uganda",
+        "xPts": 1,
+        "xGD": -3.76
+      }
+    ]
+  }
+}

@@ -2661,40 +2661,111 @@ function computeGoldenBoot(reach) {
 
 const WC_START = new Date('2026-06-11T00:00:00Z');
 
+// ── Pre-tournament predictions — computed once, frozen permanently ─────────────
+// Cached in memory for the lifetime of the process so stochastic results don't
+// drift between page refreshes. Also persisted to disk so a server restart (e.g.
+// a Railway redeploy) loads the same numbers users saw before.
+const WC_PRE_PRED_FILE = path.join(__dirname, 'wc-pre-predictions.json');
+let   _wcPrePredCache  = null;
+
+function _loadPrePredFromDisk() {
+  try {
+    if (fs.existsSync(WC_PRE_PRED_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(WC_PRE_PRED_FILE, 'utf8'));
+      console.log(`[WC] Loaded frozen pre-tournament predictions from disk (saved ${raw.savedAt})`);
+      return raw;
+    }
+  } catch (err) { console.warn('[WC] Could not load pre-pred file:', err.message); }
+  return null;
+}
+
+function _buildPrePredictions() {
+  const groupMatchPredictions   = {};
+  const groupPredictedStandings = {};
+
+  for (const [letter, teams] of Object.entries(WC_GROUPS)) {
+    const matches = [];
+    for (let i = 0; i < teams.length; i++) {
+      for (let j = i + 1; j < teams.length; j++) {
+        matches.push({ home: teams[i], away: teams[j], ...wcPoisson(teams[i], teams[j]) });
+      }
+    }
+    groupMatchPredictions[letter] = matches;
+
+    // Expected points: P(win)×3 + P(draw)×1 per match, summed over 3 games.
+    // Use Math.floor so stochastic rounding never pushes a value past 9.
+    // Also hard-clamp to [0, 9] as a safety guard.
+    const xPts = {};
+    const xGD  = {};
+    for (const t of teams) { xPts[t] = 0; xGD[t] = 0; }
+    for (const m of matches) {
+      xPts[m.home] += m.homeWin * 3 + m.draw;
+      xPts[m.away] += m.awayWin * 3 + m.draw;
+      xGD[m.home]  += m.lambdaHome - m.lambdaAway;
+      xGD[m.away]  += m.lambdaAway - m.lambdaHome;
+    }
+
+    groupPredictedStandings[letter] = teams
+      .map(t => ({
+        team: t,
+        xPts: Math.min(9, Math.max(0, Math.floor(xPts[t]))),
+        xGD:  +xGD[t].toFixed(2),
+      }))
+      .sort((a, b) => b.xPts - a.xPts || b.xGD - a.xGD);
+  }
+
+  return { groupMatchPredictions, groupPredictedStandings };
+}
+
+function getPrePredictions() {
+  if (_wcPrePredCache) return _wcPrePredCache;
+  // Try disk first (survives restarts within same deploy)
+  _wcPrePredCache = _loadPrePredFromDisk();
+  if (_wcPrePredCache) return _wcPrePredCache;
+  // First ever call — compute, cache, and persist
+  const built = _buildPrePredictions();
+  _wcPrePredCache = { savedAt: new Date().toISOString(), ...built };
+  try {
+    fs.writeFileSync(WC_PRE_PRED_FILE, JSON.stringify(_wcPrePredCache, null, 2));
+    console.log('[WC] Pre-tournament predictions frozen and saved to disk');
+  } catch (err) { console.warn('[WC] Could not persist pre-preds:', err.message); }
+  return _wcPrePredCache;
+}
+
+// Build a flat prediction lookup keyed by normalised team-name pair.
+// Handles ESPN name variants (e.g. "United States" vs "USA") via substring matching.
+function _buildPrePredLookup(groupMatchPredictions) {
+  const flat = Object.values(groupMatchPredictions).flat();
+  const norm = s => (s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  const lookup = [];
+  for (const m of flat) {
+    lookup.push({ hn: norm(m.home), an: norm(m.away), pred: m, swapped: false });
+    lookup.push({ hn: norm(m.away), an: norm(m.home), pred: m, swapped: true  });
+    // Also index martj42 aliases in case ESPN uses those
+    lookup.push({ hn: norm(toMartj42(m.home)), an: norm(toMartj42(m.away)), pred: m, swapped: false });
+    lookup.push({ hn: norm(toMartj42(m.away)), an: norm(toMartj42(m.home)), pred: m, swapped: true  });
+  }
+  return function findPred(homeDisplay, awayDisplay) {
+    const hn = norm(homeDisplay);
+    const an = norm(awayDisplay);
+    const exact = lookup.find(e => e.hn === hn && e.an === an);
+    if (exact) return exact;
+    // Fuzzy: substring containment for name variants
+    return lookup.find(e =>
+      (hn.includes(e.hn) || e.hn.includes(hn)) &&
+      (an.includes(e.an) || e.an.includes(an))
+    ) ?? null;
+  };
+}
+
 // GET /api/wc/tournament
 app.get('/api/wc/tournament', async (req, res) => {
   // Don't hit ESPN until the tournament is actually underway — before then the
   // fifa.world endpoint returns unrelated FIFA fixtures and pollutes the UI.
   if (Date.now() < WC_START.getTime()) {
-    // Pre-calculate all 6 match predictions + predicted standings for each group
-    const groupMatchPredictions  = {};
-    const groupPredictedStandings = {};
+    const { groupMatchPredictions, groupPredictedStandings } = getPrePredictions();
 
-    for (const [letter, teams] of Object.entries(WC_GROUPS)) {
-      const matches = [];
-      for (let i = 0; i < teams.length; i++) {
-        for (let j = i + 1; j < teams.length; j++) {
-          matches.push({ home: teams[i], away: teams[j], ...wcPoisson(teams[i], teams[j]) });
-        }
-      }
-      groupMatchPredictions[letter] = matches;
-
-      // Expected points: P(win)×3 + P(draw)×1 per match, summed over 3 games
-      const xPts = {};
-      const xGD  = {};
-      for (const t of teams) { xPts[t] = 0; xGD[t] = 0; }
-      for (const m of matches) {
-        xPts[m.home] += m.homeWin * 3 + m.draw;
-        xPts[m.away] += m.awayWin * 3 + m.draw;
-        xGD[m.home]  += m.lambdaHome - m.lambdaAway;
-        xGD[m.away]  += m.lambdaAway - m.lambdaHome;
-      }
-
-      groupPredictedStandings[letter] = teams
-        .map(t => ({ team: t, xPts: Math.round(xPts[t]), xGD: +xGD[t].toFixed(2) }))
-        .sort((a, b) => b.xPts - a.xPts || b.xGD - a.xGD);
-    }
-
+    // ── Insights (re-derived each call from frozen predictions) ─────────────
     // ── Group of Death rankings ──────────────────────────────────────────────
     const groupInsights = Object.entries(WC_GROUPS).map(([letter, teams]) => {
       const strengths = teams.map(t => wcStrength(t));
@@ -2773,12 +2844,33 @@ app.get('/api/wc/tournament', async (req, res) => {
     const knockoutFixtures = fixtures.filter(f => !(f.round ?? '').toLowerCase().includes('group'));
     const hasLiveData      = fixtures.length > 0 || Object.keys(groups).length > 0;
 
+    // Load frozen pre-tournament predictions so we can show "predicted vs actual"
+    const prePreds = getPrePredictions();
+    const findPrePred = prePreds ? _buildPrePredLookup(prePreds.groupMatchPredictions) : () => null;
+
+    function attachPrePreds(fixtureList) {
+      return enrichWithPredictions(fixtureList).map(f => {
+        const home  = f.teams?.home?.name ?? '';
+        const away  = f.teams?.away?.name ?? '';
+        const entry = findPrePred(home, away);
+        if (!entry) return f;
+        // If names were stored swapped, flip so home/away match the live fixture
+        const pred = entry.swapped
+          ? { ...entry.pred, home: entry.pred.away, away: entry.pred.home,
+              homeWin: entry.pred.awayWin, awayWin: entry.pred.homeWin,
+              predictedScore: entry.pred.predictedScore.split('-').reverse().join('-') }
+          : entry.pred;
+        return { ...f, _prePrediction: pred };
+      });
+    }
+
     res.json({
       phase,
       groups,
-      groupFixtures:    enrichWithPredictions(groupFixtures),
-      knockoutFixtures: enrichWithPredictions(knockoutFixtures),
-      hardcodedGroups:  WC_GROUPS,
+      groupFixtures:          attachPrePreds(groupFixtures),
+      knockoutFixtures:       enrichWithPredictions(knockoutFixtures),
+      hardcodedGroups:        WC_GROUPS,
+      preTournamentSavedAt:   prePreds?.savedAt ?? null,
       hasLiveData,
     });
   } catch (err) {

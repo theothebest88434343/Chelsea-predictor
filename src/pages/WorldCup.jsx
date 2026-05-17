@@ -202,15 +202,27 @@ function StandingsTable({ rows }) {
 }
 
 function MatchRow({ fixture }) {
-  const status  = fixture.fixture?.status?.short ?? 'NS';
-  const played  = ['FT','AET','PEN'].includes(status);
-  const live    = ['1H','HT','2H','ET','BT','P','INT'].includes(status);
-  const home    = fixture.teams?.home?.name ?? '?';
-  const away    = fixture.teams?.away?.name ?? '?';
-  const hGoals  = fixture.goals?.home;
-  const aGoals  = fixture.goals?.away;
-  const pred    = fixture._prediction;
-  const kickoff = fixture.fixture?.date ?? fixture.fixture?.timestamp;
+  const status   = fixture.fixture?.status?.short ?? 'NS';
+  const played   = ['FT','AET','PEN'].includes(status);
+  const live     = ['1H','HT','2H','ET','BT','P','INT'].includes(status);
+  const home     = fixture.teams?.home?.name ?? '?';
+  const away     = fixture.teams?.away?.name ?? '?';
+  const hGoals   = fixture.goals?.home;
+  const aGoals   = fixture.goals?.away;
+  const pred     = fixture._prediction;
+  const prePred  = fixture._prePrediction;   // frozen pre-tournament prediction
+  const kickoff  = fixture.fixture?.date ?? fixture.fixture?.timestamp;
+
+  // Determine if the pre-prediction was correct
+  const predAccuracy = (() => {
+    if (!prePred || !played || hGoals == null || aGoals == null) return null;
+    const [ph, pa] = (prePred.predictedScore ?? '').split('-').map(Number);
+    if (ph === hGoals && pa === aGoals) return 'score';   // exact scoreline
+    const predWinner = ph > pa ? 'H' : ph < pa ? 'A' : 'D';
+    const realWinner = hGoals > aGoals ? 'H' : hGoals < aGoals ? 'A' : 'D';
+    if (predWinner === realWinner) return 'result';        // correct outcome
+    return 'wrong';
+  })();
 
   return (
     <div style={{
@@ -266,6 +278,51 @@ function MatchRow({ fixture }) {
             <span className="chip chip-muted" style={{ fontSize: 10, padding: '1px 8px' }}>{pct(pred.awayWin)} {away.split(' ')[0]}</span>
           </div>
         )}
+
+        {/* Pre-tournament prediction vs real result (shown after match is played) */}
+        {prePred && played && (() => {
+          const accuracyMeta = {
+            score:  { label: '🎯 Exact score',     color: '#10b981' },
+            result: { label: '✓ Result correct',   color: '#3b82f6' },
+            wrong:  { label: '✗ Wrong result',     color: '#ef4444' },
+          };
+          const meta = accuracyMeta[predAccuracy] ?? { label: '', color: 'var(--text-muted)' };
+          return (
+            <div style={{
+              marginTop:    6,
+              padding:      '6px 8px',
+              borderRadius: 6,
+              background:   'rgba(255,255,255,0.04)',
+              border:       '1px solid var(--border)',
+              display:      'flex',
+              alignItems:   'center',
+              gap:          8,
+              flexWrap:     'wrap',
+            }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.5 }}>MODEL PREDICTED</span>
+              <span style={{
+                fontFamily:  'Bebas Neue, sans-serif',
+                fontSize:    15,
+                letterSpacing: 1.5,
+                color:       'var(--gold)',
+              }}>
+                {prePred.predictedScore.replace('-', '–')}
+              </span>
+              <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                {pct(prePred.homeWin)} / {pct(prePred.draw)} / {pct(prePred.awayWin)}
+              </span>
+              {predAccuracy && (
+                <span style={{
+                  fontSize: 9, fontWeight: 700,
+                  color:      meta.color,
+                  marginLeft: 'auto',
+                }}>
+                  {meta.label}
+                </span>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
