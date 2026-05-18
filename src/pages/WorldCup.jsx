@@ -1303,6 +1303,260 @@ function InsightsView({ data, onTeamClick }) {
   );
 }
 
+// ─── AccuracyView ────────────────────────────────────────────────────────────
+// Compares every pre-tournament prediction against the actual result once played.
+// Shows aggregate stats + per-group advancement accuracy.
+function AccuracyView({ data }) {
+  const { groupFixtures = [], knockoutFixtures = [], groupPredictedStandings = {}, hardcodedGroups = {}, groups = {} } = data;
+
+  // ── Collect all played fixtures that had a pre-tournament prediction ──────
+  const allFixtures = [...groupFixtures, ...knockoutFixtures];
+  const evaluated   = [];
+
+  for (const f of allFixtures) {
+    const status = f._statusShort ?? f.fixture?.status?.short ?? 'NS';
+    if (!['FT','AET','PEN'].includes(status)) continue;
+    const prePred = f._prePrediction;
+    if (!prePred) continue;
+    const hGoals = f.goals?.home;
+    const aGoals = f.goals?.away;
+    if (hGoals == null || aGoals == null) continue;
+
+    const [ph, pa] = (prePred.predictedScore ?? '').split('-').map(Number);
+    let outcome;
+    if (ph === hGoals && pa === aGoals) {
+      outcome = 'score';
+    } else {
+      const predWinner = ph > pa ? 'H' : ph < pa ? 'A' : 'D';
+      const realWinner = hGoals > aGoals ? 'H' : hGoals < aGoals ? 'A' : 'D';
+      outcome = predWinner === realWinner ? 'result' : 'wrong';
+    }
+    evaluated.push({ fixture: f, outcome, prePred, hGoals, aGoals });
+  }
+
+  const exact   = evaluated.filter(e => e.outcome === 'score').length;
+  const correct = evaluated.filter(e => e.outcome === 'result').length;
+  const wrong   = evaluated.filter(e => e.outcome === 'wrong').length;
+  const total   = evaluated.length;
+  const pctRight = total > 0 ? Math.round(((exact + correct) / total) * 100) : null;
+
+  // ── Group advancement accuracy ────────────────────────────────────────────
+  const apiGroupsByLetter = {};
+  for (const [name, rows] of Object.entries(groups)) {
+    const letter = name.replace(/^group\s*/i, '').trim();
+    apiGroupsByLetter[letter] = rows;
+  }
+
+  const advancementRows = Object.keys(hardcodedGroups).map(letter => {
+    const predicted = (groupPredictedStandings[letter] ?? []).slice(0, 2).map(r => r.team);
+    const apiRows   = apiGroupsByLetter[letter];
+    if (!apiRows?.length) return { letter, predicted, actual: null, complete: false };
+
+    const sorted = [...apiRows].sort((a, b) => b.points - a.points || b.gd - a.gd || b.gf - a.gf);
+    const allPlayed = sorted.every(r => r.played >= 3);
+    const actual    = sorted.slice(0, 2).map(r => r.team);
+    return { letter, predicted, actual, complete: allPlayed };
+  });
+
+  const completedGroups  = advancementRows.filter(r => r.complete);
+  const correctAdvancers = completedGroups.reduce((n, r) => {
+    return n + r.predicted.filter(t => r.actual.includes(t)).length;
+  }, 0);
+  const totalAdvancers = completedGroups.length * 2;
+
+  // ── Accuracy badge colours ─────────────────────────────────────────────────
+  const meta = {
+    score:  { label: '🎯 Exact score',      color: '#10b981' },
+    result: { label: '✓ Result correct',    color: '#3b82f6' },
+    wrong:  { label: '✗ Wrong result',      color: '#ef4444' },
+  };
+
+  // ── Empty state ───────────────────────────────────────────────────────────
+  if (total === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div className="card" style={{ padding: '24px 16px', textAlign: 'center' }}>
+          <div style={{ fontSize: 36, marginBottom: 8 }}>📊</div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--text-primary)', marginBottom: 6 }}>
+            No results yet
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            Prediction accuracy will appear here once matches kick off on{' '}
+            <span style={{ color: 'var(--gold)', fontWeight: 600 }}>June 11, 2026</span>.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+      {/* ── Overall stats ─────────────────────────────────────────────────── */}
+      <div className="card" style={{ padding: '14px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>
+            📊 Model Accuracy
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            {total} match{total !== 1 ? 'es' : ''} evaluated
+          </span>
+        </div>
+
+        {/* Big score */}
+        {pctRight !== null && (
+          <div style={{ textAlign: 'center', marginBottom: 14 }}>
+            <div style={{
+              fontFamily: 'Bebas Neue, sans-serif',
+              fontSize:   52,
+              color:      pctRight >= 60 ? '#10b981' : pctRight >= 40 ? '#f59e0b' : '#ef4444',
+              lineHeight: 1,
+            }}>
+              {pctRight}%
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+              results predicted correctly ({exact + correct}/{total})
+            </div>
+          </div>
+        )}
+
+        {/* Breakdown bars */}
+        {[
+          { key: 'score',  count: exact,   label: '🎯 Exact score',    color: '#10b981' },
+          { key: 'result', count: correct, label: '✓ Result correct',  color: '#3b82f6' },
+          { key: 'wrong',  count: wrong,   label: '✗ Wrong result',    color: '#ef4444' },
+        ].map(({ key, count, label, color }) => (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color, fontWeight: 700, minWidth: 110 }}>{label}</span>
+            <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+              <div style={{
+                width:       total > 0 ? `${(count / total) * 100}%` : '0%',
+                height:      '100%',
+                borderRadius: 3,
+                background:  color,
+                transition:  'width 0.4s ease',
+              }} />
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, color, minWidth: 28, textAlign: 'right' }}>
+              {count}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Group advancement accuracy ───────────────────────────────────── */}
+      {completedGroups.length > 0 && (
+        <div className="card" style={{ padding: '14px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)' }}>
+              🏁 Advancement Predictions
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              {correctAdvancers}/{totalAdvancers} correct
+            </span>
+          </div>
+
+          {completedGroups.map(({ letter, predicted, actual }) => {
+            const color = GROUP_COLORS[letter] ?? 'var(--gold)';
+            return (
+              <div key={letter} style={{
+                display:      'flex',
+                alignItems:   'center',
+                gap:          8,
+                padding:      '7px 0',
+                borderBottom: '1px solid var(--border)',
+              }}>
+                {/* Group badge */}
+                <div style={{
+                  width: 22, height: 22, borderRadius: 5,
+                  background: `${color}22`, border: `1.5px solid ${color}55`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: 'Bebas Neue, sans-serif', fontSize: 13, color,
+                  flexShrink: 0,
+                }}>
+                  {letter}
+                </div>
+
+                {/* Predicted vs actual */}
+                <div style={{ flex: 1, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {predicted.map(team => {
+                    const hit = actual.includes(team);
+                    return (
+                      <span key={team} style={{
+                        fontSize:   10,
+                        fontWeight: 700,
+                        color:      hit ? '#10b981' : '#ef4444',
+                        background: hit ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                        border:     `1px solid ${hit ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                        borderRadius: 4,
+                        padding:    '1px 6px',
+                        display:    'flex',
+                        alignItems: 'center',
+                        gap:        3,
+                      }}>
+                        {hit ? '✓' : '✗'} {flag(team)}{team.split(' ')[0]}
+                      </span>
+                    );
+                  })}
+                </div>
+
+                {/* Actual qualifiers (if different) */}
+                {predicted.some(t => !actual.includes(t)) && (
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>
+                    actual: {actual.map(t => flag(t) + t.split(' ')[0]).join(' ')}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Match-by-match breakdown ─────────────────────────────────────── */}
+      <div className="card" style={{ padding: '14px 16px' }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', marginBottom: 12 }}>
+          Match Breakdown
+        </div>
+        {evaluated.map(({ fixture: f, outcome, prePred, hGoals, aGoals }, i) => {
+          const home = f.teams?.home?.name ?? '?';
+          const away = f.teams?.away?.name ?? '?';
+          const { color, label } = meta[outcome];
+          return (
+            <div key={i} style={{
+              display:      'flex',
+              alignItems:   'center',
+              gap:          8,
+              padding:      '7px 0',
+              borderBottom: i < evaluated.length - 1 ? '1px solid var(--border)' : 'none',
+            }}>
+              {/* Teams + score */}
+              <div style={{ flex: 1, fontSize: 12 }}>
+                <span style={{ fontWeight: 600 }}>{flag(home)}{home.split(' ')[0]}</span>
+                <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 15, margin: '0 6px', color: 'var(--text-primary)' }}>
+                  {hGoals}–{aGoals}
+                </span>
+                <span style={{ fontWeight: 600 }}>{away.split(' ')[0]}{flag(away)}</span>
+              </div>
+              {/* Predicted score */}
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'Bebas Neue, sans-serif', letterSpacing: 1 }}>
+                {prePred.predictedScore.replace('-','–')}
+              </span>
+              {/* Outcome badge */}
+              <span style={{ fontSize: 9, fontWeight: 700, color, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}>
+                {label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', fontStyle: 'italic' }}>
+        Poisson model predictions vs actual results · for entertainment only
+      </div>
+    </div>
+  );
+}
+
 // Winner Odds — all 48 teams ranked by championship probability
 function WinnerOddsView({ data, onTeamClick }) {
   const reach  = data?.tournamentReach ?? {};
@@ -1415,7 +1669,7 @@ function WinnerOddsView({ data, onTeamClick }) {
 // Pre-tournament view — group draw with all match predictions pre-loaded
 function PreTournamentView({ data, onTeamClick }) {
   const { hardcodedGroups, groupMatchPredictions, groupPredictedStandings } = data;
-  const [tab, setTab]           = useState('groups'); // 'groups' | 'table' | 'insights' | 'odds'
+  const [tab, setTab]           = useState('groups'); // 'groups' | 'table' | 'insights' | 'odds' | 'accuracy'
   const [expandedGroup, setExpandedGroup] = useState(null);
   const [expandedH2H, setExpandedH2H]    = useState(null); // 'A-0', 'B-2', etc.
 
@@ -1657,7 +1911,7 @@ function DisclaimerModal({ onDismiss }) {
 
 export default function WorldCup() {
   const { data, loading, error } = useWCTournament();
-  const [view, setView]          = useState('groups'); // 'groups' | 'knockout'
+  const [view, setView]          = useState('groups'); // 'groups' | 'knockout' | 'accuracy'
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [showDisclaimer, setShowDisclaimer] = useState(() => {
     try { return !localStorage.getItem('wc_disclaimer_seen'); } catch { return false; }
@@ -1710,6 +1964,7 @@ export default function WorldCup() {
           {[
             { id: 'groups',   label: 'Groups' },
             { id: 'knockout', label: 'Knockout', disabled: !isKnockout && !data?.knockoutFixtures?.length },
+            { id: 'accuracy', label: '📊 Accuracy' },
           ].map(({ id, label, disabled }) => (
             <button
               key={id}
@@ -1739,6 +1994,8 @@ export default function WorldCup() {
         <PreTournamentView data={{ hardcodedGroups: {}, phase: 'PRE_TOURNAMENT', ...data }} onTeamClick={setSelectedTeam} />
       ) : view === 'groups' ? (
         <GroupStageView data={data} />
+      ) : view === 'accuracy' ? (
+        <AccuracyView data={data} />
       ) : (
         <KnockoutView data={data} />
       )}

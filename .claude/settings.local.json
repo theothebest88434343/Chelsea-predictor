@@ -12,7 +12,8 @@
       "WebFetch(domain:worldcupwiki.com)",
       "WebFetch(domain:en.wikipedia.org)",
       "WebFetch(domain:www.fifaworldcupnews.com)",
-      "WebFetch(domain:soccer2026.app)"
+      "WebFetch(domain:soccer2026.app)",
+      "Bash(xargs kill -9)"
     ]
   }
 }
