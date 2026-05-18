@@ -2310,10 +2310,38 @@ function enrichWithPredictions(fixtures) {
 // Keys: pAdvance, pR16, pQF, pSF, pFinal, pWinner
 let _tournamentReachCache = null;
 let _tournamentReachExpires = 0;
+let _liveReachCache = null;       // separate cache for live-data runs
+let _liveReachExpires = 0;
 
-function simulateTournamentReach(n = 10000) {
-  if (_tournamentReachCache && Date.now() < _tournamentReachExpires) {
-    return _tournamentReachCache;
+// liveGroups — optional: { 'A': [{ team, points, gd, gf, played }], ... }
+// When provided, completed groups (all played=3) use actual standings
+// deterministically instead of being re-simulated. Incomplete groups
+// are still simulated from scratch. Odds update every 15 min during the
+// tournament vs the 1hr pre-tournament cache.
+function simulateTournamentReach(n = 10000, liveGroups = null) {
+  if (liveGroups) {
+    if (_liveReachCache && Date.now() < _liveReachExpires) return _liveReachCache;
+  } else {
+    if (_tournamentReachCache && Date.now() < _tournamentReachExpires) return _tournamentReachCache;
+  }
+
+  // Pre-compute which groups are fully completed so we can lock them in
+  // rather than re-simulating. A group is complete when all 4 teams have played 3 games.
+  const lockedGroups = {}; // letter → { sorted: [t1,t2,t3,t4], pts, gd, gf }
+  if (liveGroups) {
+    for (const [letter, rows] of Object.entries(liveGroups)) {
+      if (rows.length === 4 && rows.every(r => (r.played ?? 0) >= 3)) {
+        const sorted = [...rows].sort((a, b) =>
+          b.points - a.points || b.gd - a.gd || (b.gf ?? 0) - (a.gf ?? 0)
+        );
+        lockedGroups[letter] = {
+          sorted: sorted.map(r => r.team),
+          pts: Object.fromEntries(rows.map(r => [r.team, r.points])),
+          gd:  Object.fromEntries(rows.map(r => [r.team, r.gd ?? 0])),
+          gf:  Object.fromEntries(rows.map(r => [r.team, r.gf ?? 0])),
+        };
+      }
+    }
   }
 
   // Counters per team
@@ -2380,7 +2408,8 @@ function simulateTournamentReach(n = 10000) {
   for (let sim = 0; sim < n; sim++) {
     const groupResults = {}; // letter → { sorted, pts, gd, gf }
     for (const [letter, teams] of Object.entries(WC_GROUPS)) {
-      groupResults[letter] = simulateGroup(teams);
+      // Use actual standings for completed groups — no randomness needed
+      groupResults[letter] = lockedGroups[letter] ?? simulateGroup(teams);
     }
 
     // Mark group advance for top-2 per group
@@ -2481,8 +2510,13 @@ function simulateTournamentReach(n = 10000) {
     };
   }
 
-  _tournamentReachCache   = result;
-  _tournamentReachExpires = Date.now() + 60 * 60 * 1000; // 1hr
+  if (liveGroups) {
+    _liveReachCache   = result;
+    _liveReachExpires = Date.now() + 15 * 60 * 1000; // 15min — refreshes as groups complete
+  } else {
+    _tournamentReachCache   = result;
+    _tournamentReachExpires = Date.now() + 60 * 60 * 1000; // 1hr pre-tournament
+  }
   return result;
 }
 
@@ -2931,6 +2965,11 @@ app.get('/api/wc/tournament', async (req, res) => {
       });
     }
 
+    // Compute live tournament reach — completed groups use actual standings,
+    // incomplete groups are simulated. This keeps Odds tab and Team Detail
+    // Modal accurate throughout the tournament.
+    const liveTournamentReach = simulateTournamentReach(10000, groups);
+
     res.json({
       phase,
       groups,
@@ -2938,6 +2977,8 @@ app.get('/api/wc/tournament', async (req, res) => {
       knockoutFixtures:       enrichWithPredictions(knockoutFixtures),
       hardcodedGroups:        WC_GROUPS,
       preTournamentSavedAt:   prePreds?.savedAt ?? null,
+      tournamentReach:        liveTournamentReach,
+      goldenBoot:             computeGoldenBoot(liveTournamentReach),
       hasLiveData,
     });
   } catch (err) {
