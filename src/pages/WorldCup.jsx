@@ -4,23 +4,45 @@ import { format, parseISO } from 'date-fns';
 // ─── Flag map ─────────────────────────────────────────────────────────────────
 
 const FLAGS = {
-  'Argentina':          '🇦🇷', 'Australia':       '🇦🇺', 'Algeria':         '🇩🇿',
-  'Belgium':            '🇧🇪', 'Bolivia':         '🇧🇴', 'Brazil':          '🇧🇷',
-  'Cameroon':           '🇨🇲', 'Canada':          '🇨🇦', 'Colombia':        '🇨🇴',
-  'Croatia':            '🇭🇷', 'Cuba':            '🇨🇺', 'Denmark':         '🇩🇰',
-  'DR Congo':           '🇨🇩', 'Ecuador':         '🇪🇨', 'England':         '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
-  'France':             '🇫🇷', 'Germany':         '🇩🇪', 'Ghana':           '🇬🇭',
-  'Honduras':           '🇭🇳', 'Indonesia':       '🇮🇩', 'Iran':            '🇮🇷',
-  'Italy':              '🇮🇹', 'Jamaica':         '🇯🇲', 'Japan':           '🇯🇵',
-  'Kenya':              '🇰🇪', 'Mali':            '🇲🇱', 'Mexico':          '🇲🇽',
-  'Morocco':            '🇲🇦', 'Netherlands':     '🇳🇱', 'New Zealand':     '🇳🇿',
-  'Nigeria':            '🇳🇬', 'Panama':          '🇵🇦', 'Portugal':        '🇵🇹',
-  'Saudi Arabia':       '🇸🇦', 'Senegal':         '🇸🇳', 'Serbia':          '🇷🇸',
-  'Slovenia':           '🇸🇮', 'South Africa':    '🇿🇦', 'South Korea':     '🇰🇷',
-  'Spain':              '🇪🇸', 'Switzerland':     '🇨🇭', 'Trinidad & Tobago':'🇹🇹',
-  'Turkey':             '🇹🇷', 'Uganda':          '🇺🇬', 'Ukraine':         '🇺🇦',
-  'Uruguay':            '🇺🇾', 'USA':             '🇺🇸', 'United States':   '🇺🇸',
-  'Uzbekistan':         '🇺🇿', 'Venezuela':       '🇻🇪',
+  // Group A
+  'Mexico':                  '🇲🇽', 'South Africa':          '🇿🇦',
+  'South Korea':             '🇰🇷', 'Korea Republic':        '🇰🇷',
+  'Czech Republic':          '🇨🇿',
+  // Group B
+  'Canada':                  '🇨🇦', 'Bosnia & Herzegovina':  '🇧🇦',
+  'Qatar':                   '🇶🇦', 'Switzerland':           '🇨🇭',
+  // Group C
+  'Brazil':                  '🇧🇷', 'Morocco':               '🇲🇦',
+  'Haiti':                   '🇭🇹', 'Scotland':              '🏴󠁧󠁢󠁳󠁣󠁴󠁿',
+  // Group D
+  'United States':           '🇺🇸', 'USA':                   '🇺🇸',
+  'Paraguay':                '🇵🇾', 'Australia':             '🇦🇺',
+  'Turkey':                  '🇹🇷',
+  // Group E
+  'Germany':                 '🇩🇪', 'Curaçao':               '🇨🇼',
+  "Côte d'Ivoire":           '🇨🇮', 'Ivory Coast':           '🇨🇮',
+  'Ecuador':                 '🇪🇨',
+  // Group F
+  'Netherlands':             '🇳🇱', 'Japan':                 '🇯🇵',
+  'Sweden':                  '🇸🇪', 'Tunisia':               '🇹🇳',
+  // Group G
+  'Belgium':                 '🇧🇪', 'Egypt':                 '🇪🇬',
+  'Iran':                    '🇮🇷', 'New Zealand':           '🇳🇿',
+  // Group H
+  'Spain':                   '🇪🇸', 'Cabo Verde':            '🇨🇻',
+  'Saudi Arabia':            '🇸🇦', 'Uruguay':               '🇺🇾',
+  // Group I
+  'France':                  '🇫🇷', 'Senegal':               '🇸🇳',
+  'Iraq':                    '🇮🇶', 'Norway':                '🇳🇴',
+  // Group J
+  'Argentina':               '🇦🇷', 'Algeria':               '🇩🇿',
+  'Austria':                 '🇦🇹', 'Jordan':                '🇯🇴',
+  // Group K
+  'Portugal':                '🇵🇹', 'DR Congo':              '🇨🇩',
+  'Uzbekistan':              '🇺🇿', 'Colombia':              '🇨🇴',
+  // Group L
+  'England':                 '🏴󠁧󠁢󠁥󠁮󠁧󠁿', 'Croatia':               '🇭🇷',
+  'Ghana':                   '🇬🇭', 'Panama':                '🇵🇦',
 };
 
 function flag(name) {
@@ -165,12 +187,14 @@ function StandingsTable({ rows }) {
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
       <thead>
         <tr style={{ color: 'var(--text-muted)', fontSize: 10 }}>
-          <th style={{ textAlign: 'left',   padding: '3px 0', fontWeight: 600 }}>#</th>
+          <th style={{ textAlign: 'left',   padding: '3px 0',  fontWeight: 600 }}>#</th>
           <th style={{ textAlign: 'left',   padding: '3px 4px', fontWeight: 600 }}>Team</th>
           <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>P</th>
           <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>W</th>
           <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>D</th>
           <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>L</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>GF</th>
+          <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>GA</th>
           <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>GD</th>
           <th style={{ textAlign: 'center', padding: '3px 4px', fontWeight: 600 }}>Pts</th>
         </tr>
@@ -179,18 +203,27 @@ function StandingsTable({ rows }) {
         {rows.slice().sort((a, b) => b.points - a.points || b.gd - a.gd || b.gf - a.gf)
           .map((row, i) => (
           <tr key={row.team} style={{
-            background:   i < 2 ? 'rgba(255,215,0,0.06)' : 'transparent',
-            borderTop:    '1px solid var(--border)',
+            background: i < 2 ? 'rgba(255,215,0,0.06)' : i === 2 ? 'rgba(245,158,11,0.04)' : 'transparent',
+            borderTop:  '1px solid var(--border)',
           }}>
-            <td style={{ padding: '5px 0', color: i < 2 ? 'var(--gold)' : 'var(--text-muted)', fontWeight: 700 }}>
+            <td style={{ padding: '5px 0', color: i < 2 ? 'var(--gold)' : i === 2 ? '#f59e0b' : 'var(--text-muted)', fontWeight: 700 }}>
               {i + 1}
             </td>
-            <td style={{ padding: '5px 4px', fontWeight: 600 }}>{row.team}</td>
+            <td style={{ padding: '5px 4px', fontWeight: 600 }}>
+              <span style={{ marginRight: 4 }}>{flag(row.team)}</span>{row.team}
+              {i === 2 && (
+                <span style={{ marginLeft: 5, fontSize: 8, fontWeight: 700, color: '#f59e0b', background: '#f59e0b22', border: '1px solid #f59e0b55', borderRadius: 3, padding: '1px 4px', verticalAlign: 'middle' }}>
+                  3rd?
+                </span>
+              )}
+            </td>
             <td style={{ padding: '5px 4px', textAlign: 'center', color: 'var(--text-muted)' }}>{row.played}</td>
             <td style={{ padding: '5px 4px', textAlign: 'center' }}>{row.won}</td>
             <td style={{ padding: '5px 4px', textAlign: 'center', color: 'var(--text-muted)' }}>{row.drawn}</td>
             <td style={{ padding: '5px 4px', textAlign: 'center', color: 'var(--text-muted)' }}>{row.lost}</td>
-            <td style={{ padding: '5px 4px', textAlign: 'center', color: row.gd >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            <td style={{ padding: '5px 4px', textAlign: 'center' }}>{row.gf ?? 0}</td>
+            <td style={{ padding: '5px 4px', textAlign: 'center', color: 'var(--text-muted)' }}>{row.ga ?? 0}</td>
+            <td style={{ padding: '5px 4px', textAlign: 'center', color: row.gd > 0 ? 'var(--green)' : row.gd < 0 ? 'var(--red)' : 'var(--text-muted)' }}>
               {row.gd > 0 ? `+${row.gd}` : row.gd}
             </td>
             <td style={{ padding: '5px 4px', textAlign: 'center', fontWeight: 700, color: 'var(--gold)' }}>{row.points}</td>
@@ -202,16 +235,17 @@ function StandingsTable({ rows }) {
 }
 
 function MatchRow({ fixture }) {
-  const status   = fixture.fixture?.status?.short ?? 'NS';
+  // Support both ESPN shape (_statusShort / date) and Football-API shape (fixture.fixture.status.short)
+  const status   = fixture._statusShort ?? fixture.fixture?.status?.short ?? 'NS';
   const played   = ['FT','AET','PEN'].includes(status);
-  const live     = ['1H','HT','2H','ET','BT','P','INT'].includes(status);
+  const live     = ['LIVE','1H','HT','2H','ET','BT','P','INT'].includes(status);
   const home     = fixture.teams?.home?.name ?? '?';
   const away     = fixture.teams?.away?.name ?? '?';
   const hGoals   = fixture.goals?.home;
   const aGoals   = fixture.goals?.away;
   const pred     = fixture._prediction;
   const prePred  = fixture._prePrediction;   // frozen pre-tournament prediction
-  const kickoff  = fixture.fixture?.date ?? fixture.fixture?.timestamp;
+  const kickoff  = fixture.date ?? fixture.fixture?.date ?? fixture.fixture?.timestamp;
 
   // Determine if the pre-prediction was correct
   const predAccuracy = (() => {
@@ -363,7 +397,7 @@ function GroupStageView({ data }) {
           return teamSet.has(h) || teamSet.has(a);
         });
 
-        const played   = groupMatches.filter(f => ['FT','AET','PEN'].includes(f.fixture?.status?.short)).length;
+        const played   = groupMatches.filter(f => ['FT','AET','PEN'].includes(f._statusShort ?? f.fixture?.status?.short)).length;
         const total    = groupMatches.length || 6;
         const progress = total ? Math.round((played / total) * 100) : 0;
         const done     = progress === 100;
@@ -424,12 +458,12 @@ function GroupStageView({ data }) {
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: 0.5, marginBottom: 4 }}>
                       MATCHES
                     </div>
-                    {groupMatches.map((f, i) => <MatchRow key={f.fixture?.id ?? i} fixture={f} />)}
+                    {groupMatches.map((f, i) => <MatchRow key={f.id ?? f.fixture?.id ?? i} fixture={f} />)}
                   </div>
                 )}
                 {groupMatches.length === 0 && (
                   <div style={{ marginTop: 12, color: 'var(--text-muted)', fontSize: 12 }}>
-                    Fixtures will appear once the API returns schedule data.
+                    Matches begin June 11, 2026.
                   </div>
                 )}
               </div>
@@ -457,7 +491,7 @@ function KnockoutView({ data }) {
 
   const rounds = {};
   for (const f of knockoutFixtures) {
-    const round = f.league?.round ?? 'Unknown';
+    const round = f.round ?? f.league?.round ?? 'Unknown';
     rounds[round] = rounds[round] ?? [];
     rounds[round].push(f);
   }
@@ -478,7 +512,7 @@ function KnockoutView({ data }) {
       {sortedRounds.map(round => (
         <div key={round} className="card">
           <div className="card-title">{round}</div>
-          {rounds[round].map((f, i) => <MatchRow key={f.fixture?.id ?? i} fixture={f} />)}
+          {rounds[round].map((f, i) => <MatchRow key={f.id ?? f.fixture?.id ?? i} fixture={f} />)}
         </div>
       ))}
     </div>
@@ -510,9 +544,11 @@ function PredictedTableView({ data, onTeamClick }) {
             </div>
 
             {rows.map((row, i) => {
-              const advances = i < 2;
-              const maxPts   = rows[0]?.xPts ?? 1;
-              const barPct   = maxPts > 0 ? (row.xPts / maxPts) * 100 : 0;
+              const advances  = i < 2;
+              const maybeAdv  = i === 2; // 3rd place — may advance as one of best 8 third-place teams
+              const maxPts    = rows[0]?.xPts ?? 1;
+              const barPct    = maxPts > 0 ? (row.xPts / maxPts) * 100 : 0;
+              const rowColor  = advances ? color : maybeAdv ? '#f59e0b' : 'var(--text-muted)';
               return (
                 <div key={row.team} style={{
                   display:      'flex',
@@ -521,28 +557,32 @@ function PredictedTableView({ data, onTeamClick }) {
                   padding:      '7px 0',
                   borderBottom: i < rows.length - 1 ? '1px solid var(--border)' : 'none',
                 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: advances ? color : 'var(--text-muted)', minWidth: 16, textAlign: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: rowColor, minWidth: 16, textAlign: 'center' }}>
                     {i + 1}
                   </span>
                   <span style={{ fontSize: 15, cursor: 'pointer' }} onClick={() => onTeamClick?.(row.team)}>{flag(row.team)}</span>
                   <span style={{ fontSize: 13, fontWeight: 600, flex: 1, cursor: 'pointer' }} onClick={() => onTeamClick?.(row.team)}>{row.team}</span>
                   <div style={{ width: 70, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
-                    <div style={{ width: `${barPct}%`, height: '100%', borderRadius: 3, background: advances ? color : 'rgba(255,255,255,0.18)' }} />
+                    <div style={{ width: `${barPct}%`, height: '100%', borderRadius: 3, background: advances ? color : maybeAdv ? '#f59e0b55' : 'rgba(255,255,255,0.18)' }} />
                   </div>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: advances ? color : 'var(--text-muted)', minWidth: 42, textAlign: 'right' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: rowColor, minWidth: 42, textAlign: 'right' }}>
                     {row.xPts} pts
                   </span>
-                  {advances && (
+                  {advances ? (
                     <span style={{ fontSize: 9, fontWeight: 700, color, background: `${color}22`, border: `1px solid ${color}55`, borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap' }}>
                       ADV
                     </span>
-                  )}
+                  ) : maybeAdv ? (
+                    <span style={{ fontSize: 9, fontWeight: 700, color: '#f59e0b', background: '#f59e0b22', border: '1px solid #f59e0b55', borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap' }}>
+                      3rd?
+                    </span>
+                  ) : null}
                 </div>
               );
             })}
 
             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 8, fontStyle: 'italic' }}>
-              Expected points from 50k simulations · top 2 advance
+              Predicted result per match (3W / 1D / 0L) · top 2 advance · best 8 third-place teams also advance
             </div>
           </div>
         );
@@ -857,8 +897,8 @@ function TeamDetailModal({ team, data, onClose }) {
                   {rank}
                 </div>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: rank <= 2 ? color : 'var(--text-muted)' }}>
-                    {rank <= 2 ? 'Predicted to advance' : 'Predicted to exit'}
+                  <div style={{ fontSize: 14, fontWeight: 700, color: rank <= 2 ? color : rank === 3 ? '#f59e0b' : 'var(--text-muted)' }}>
+                    {rank <= 2 ? 'Predicted to advance' : rank === 3 ? 'Possible best-3rd advance' : 'Predicted to exit'}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
                     {rankEntry.xPts} xPts · {rankEntry.xGD > 0 ? '+' : ''}{rankEntry.xGD} xGD
@@ -1263,10 +1303,119 @@ function InsightsView({ data, onTeamClick }) {
   );
 }
 
+// Winner Odds — all 48 teams ranked by championship probability
+function WinnerOddsView({ data, onTeamClick }) {
+  const reach  = data?.tournamentReach ?? {};
+  const groups = data?.hardcodedGroups ?? {};
+
+  // Build ranked list: every team that has a reach entry, sorted by pWinner desc
+  const ranked = Object.entries(reach)
+    .map(([team, r]) => ({ team, pWinner: r.pWinner ?? 0, pFinal: r.pFinal ?? 0, pSF: r.pSF ?? 0 }))
+    .sort((a, b) => b.pWinner - a.pWinner);
+
+  if (!ranked.length) {
+    return (
+      <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>
+        <div style={{ fontSize: 28, marginBottom: 8 }}>🏆</div>
+        <div style={{ fontWeight: 600 }}>Loading odds…</div>
+      </div>
+    );
+  }
+
+  const maxP = ranked[0]?.pWinner ?? 1;
+
+  // Find which group a team belongs to (for accent colour)
+  function teamColor(team) {
+    for (const [letter, teams] of Object.entries(groups)) {
+      if (teams.includes(team)) return GROUP_COLORS[letter] ?? 'var(--gold)';
+    }
+    return 'var(--gold)';
+  }
+
+  const MEDAL = ['🥇', '🥈', '🥉'];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* Header card */}
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 2 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          Championship probabilities from <strong style={{ color: 'var(--text-primary)' }}>10,000 Monte Carlo simulations</strong> of the full tournament — group stage through the Final.
+        </div>
+      </div>
+
+      {ranked.map((entry, i) => {
+        const color  = teamColor(entry.team);
+        const barPct = maxP > 0 ? (entry.pWinner / maxP) * 100 : 0;
+        const isTop3 = i < 3;
+        const isTiny = entry.pWinner < 0.005; // < 0.5% — collapse row
+
+        return (
+          <div
+            key={entry.team}
+            onClick={() => onTeamClick?.(entry.team)}
+            style={{
+              display:      'flex',
+              alignItems:   'center',
+              gap:          10,
+              padding:      isTiny ? '5px 14px' : '10px 14px',
+              borderRadius: 10,
+              background:   isTop3 ? 'var(--surface2)' : 'transparent',
+              border:       isTop3 ? `1px solid ${color}33` : '1px solid var(--border)',
+              cursor:       'pointer',
+              transition:   'background 150ms',
+            }}
+          >
+            {/* Rank */}
+            <div style={{
+              fontFamily:  'Bebas Neue, sans-serif',
+              fontSize:    isTop3 ? 20 : 14,
+              color:       isTop3 ? color : 'var(--text-muted)',
+              minWidth:    28,
+              textAlign:   'center',
+            }}>
+              {isTop3 ? MEDAL[i] : i + 1}
+            </div>
+
+            {/* Flag */}
+            <span style={{ fontSize: isTop3 ? 22 : 16 }}>{flag(entry.team)}</span>
+
+            {/* Name */}
+            <span style={{ fontSize: isTop3 ? 14 : 12, fontWeight: isTop3 ? 700 : 600, flex: 1 }}>
+              {entry.team}
+            </span>
+
+            {/* Bar + pct */}
+            {!isTiny && (
+              <div style={{ width: 90, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+                <div style={{ width: `${barPct}%`, height: '100%', borderRadius: 3, background: color }} />
+              </div>
+            )}
+            <span style={{
+              fontSize:   isTop3 ? 13 : 11,
+              fontWeight: 700,
+              color:      isTop3 ? color : 'var(--text-muted)',
+              minWidth:   42,
+              textAlign:  'right',
+            }}>
+              {entry.pWinner >= 0.001
+                ? `${(entry.pWinner * 100).toFixed(1)}%`
+                : '<0.1%'}
+            </span>
+          </div>
+        );
+      })}
+
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6, fontStyle: 'italic', padding: '0 4px' }}>
+        Tap any team for full Path to the Final breakdown · Poisson model · for entertainment only
+      </div>
+    </div>
+  );
+}
+
 // Pre-tournament view — group draw with all match predictions pre-loaded
 function PreTournamentView({ data, onTeamClick }) {
   const { hardcodedGroups, groupMatchPredictions, groupPredictedStandings } = data;
-  const [tab, setTab]           = useState('groups'); // 'groups' | 'table' | 'insights'
+  const [tab, setTab]           = useState('groups'); // 'groups' | 'table' | 'insights' | 'odds'
   const [expandedGroup, setExpandedGroup] = useState(null);
   const [expandedH2H, setExpandedH2H]    = useState(null); // 'A-0', 'B-2', etc.
 
@@ -1284,12 +1433,15 @@ function PreTournamentView({ data, onTeamClick }) {
         <button style={tabStyle('groups')}   onClick={() => setTab('groups')}>Groups</button>
         <button style={tabStyle('table')}    onClick={() => setTab('table')}>Table</button>
         <button style={tabStyle('insights')} onClick={() => setTab('insights')}>Insights</button>
+        <button style={tabStyle('odds')}     onClick={() => setTab('odds')}>🏆 Odds</button>
       </div>
 
       {tab === 'table' ? (
         <PredictedTableView data={data} onTeamClick={onTeamClick} />
       ) : tab === 'insights' ? (
         <InsightsView data={data} onTeamClick={onTeamClick} />
+      ) : tab === 'odds' ? (
+        <WinnerOddsView data={data} onTeamClick={onTeamClick} />
       ) : (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {Object.entries(hardcodedGroups).map(([letter, teams]) => {

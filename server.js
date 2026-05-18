@@ -2100,19 +2100,23 @@ async function backfillPendingResults() {
 
 // FIFA ranking strength points (approximate, used for Poisson lambdas)
 const FIFA_STRENGTH = {
+  // Top tier
   Argentina: 1870, France: 1854, England: 1818, Brazil: 1794, Spain: 1787,
-  Portugal: 1764, Netherlands: 1752, Belgium: 1745, Germany: 1743, Italy: 1726,
+  Portugal: 1764, Netherlands: 1752, Belgium: 1745, Germany: 1743,
+  // Second tier
   Croatia: 1716, Morocco: 1712, USA: 1692, 'United States': 1692, Mexico: 1680,
   Colombia: 1678, Uruguay: 1676, Senegal: 1672, Canada: 1660, Japan: 1659,
-  Ecuador: 1658, Switzerland: 1652, Denmark: 1649, Australia: 1645, Poland: 1644,
-  'South Korea': 1642, Iran: 1640, Peru: 1632, Serbia: 1630, Hungary: 1622,
-  Turkey: 1618, Panama: 1608, 'Costa Rica': 1606, Ghana: 1604, Cameroon: 1602,
-  'Saudi Arabia': 1595, Nigeria: 1590, Honduras: 1588, Algeria: 1580,
-  'South Africa': 1575, Jamaica: 1568, Paraguay: 1562, Slovakia: 1555,
-  Slovenia: 1548, Ukraine: 1540, Romania: 1534, Egypt: 1530, Mali: 1515,
-  Bolivia: 1508, 'New Zealand': 1490, 'DR Congo': 1485, Venezuela: 1478,
-  Kenya: 1465, Uzbekistan: 1460, Uganda: 1445, Cuba: 1420,
-  'Trinidad & Tobago': 1415, Indonesia: 1400, Iraq: 1560, Qatar: 1550,
+  Ecuador: 1658, Switzerland: 1652, Australia: 1645, 'South Korea': 1642,
+  'Korea Republic': 1642, Sweden: 1638, Norway: 1622, Iran: 1640, Turkey: 1618,
+  // Third tier
+  Scotland: 1612, 'Czech Republic': 1608, Austria: 1606, Panama: 1608,
+  Ghana: 1604, 'Saudi Arabia': 1598, Algeria: 1585, Egypt: 1580,
+  "Côte d'Ivoire": 1598, 'Ivory Coast': 1598, 'South Africa': 1572,
+  'New Zealand': 1490, 'DR Congo': 1485, Uzbekistan: 1462,
+  // Fourth tier
+  'Bosnia & Herzegovina': 1578, Tunisia: 1562, Paraguay: 1562, Iraq: 1558,
+  Qatar: 1545, 'Cabo Verde': 1498, Jordan: 1475, Haiti: 1445,
+  'Curaçao': 1412,
 };
 
 function wcStrength(name) {
@@ -2161,20 +2165,21 @@ function wcPoisson(homeTeam, awayTeam, simCount = 50000) {
   };
 }
 
-// Hardcoded 2026 group draw (confirmed December 2025)
+// Hardcoded 2026 World Cup group draw — confirmed official draw (December 2024)
+// 48 teams across 12 groups of 4. Top 2 + best 8 third-place teams advance to R32.
 const WC_GROUPS = {
-  A: ['USA',       'Panama',      'Bolivia',       'South Africa'],
-  B: ['Mexico',    'South Korea', 'Cuba',          'Jamaica'],
-  C: ['Canada',    'Uruguay',     'Mali',          'Uzbekistan'],
-  D: ['Spain',     'Japan',       'Kenya',         'Trinidad & Tobago'],
-  E: ['Germany',   'Colombia',    'Ecuador',       'Indonesia'],
-  F: ['Portugal',  'Argentina',   'Algeria',       'New Zealand'],
-  G: ['France',    'Belgium',     'Brazil',        'Honduras'],
-  H: ['England',   'Netherlands', 'Senegal',       'Ukraine'],
-  I: ['Morocco',   'Croatia',     'Denmark',       'Nigeria'],
-  J: ['Italy',     'Australia',   'Ghana',         'DR Congo'],
-  K: ['Iran',      'Switzerland', 'Venezuela',     'Cameroon'],
-  L: ['Serbia',    'Turkey',      'Saudi Arabia',  'Uganda'],
+  A: ['Mexico',         'South Africa',          'South Korea',    'Czech Republic'],
+  B: ['Canada',         'Bosnia & Herzegovina',  'Qatar',          'Switzerland'],
+  C: ['Brazil',         'Morocco',               'Haiti',          'Scotland'],
+  D: ['United States',  'Paraguay',              'Australia',      'Turkey'],
+  E: ['Germany',        'Curaçao',               "Côte d'Ivoire",  'Ecuador'],
+  F: ['Netherlands',    'Japan',                 'Sweden',         'Tunisia'],
+  G: ['Belgium',        'Egypt',                 'Iran',           'New Zealand'],
+  H: ['Spain',          'Cabo Verde',            'Saudi Arabia',   'Uruguay'],
+  I: ['France',         'Senegal',               'Iraq',           'Norway'],
+  J: ['Argentina',      'Algeria',               'Austria',        'Jordan'],
+  K: ['Portugal',       'DR Congo',              'Uzbekistan',     'Colombia'],
+  L: ['England',        'Croatia',               'Ghana',          'Panama'],
 };
 
 // ESPN undocumented JSON endpoints — no key required
@@ -2306,7 +2311,7 @@ function enrichWithPredictions(fixtures) {
 let _tournamentReachCache = null;
 let _tournamentReachExpires = 0;
 
-function simulateTournamentReach(n = 3000) {
+function simulateTournamentReach(n = 10000) {
   if (_tournamentReachCache && Date.now() < _tournamentReachExpires) {
     return _tournamentReachCache;
   }
@@ -2344,11 +2349,12 @@ function simulateTournamentReach(n = 3000) {
     return Math.random() < sA / (sA + sB) ? teamA : teamB;
   }
 
-  // Simulate a group stage: returns sorted [1st, 2nd, 3rd, 4th] and the third-place team's xPts
+  // Simulate a group stage: returns sorted [1st, 2nd, 3rd, 4th] plus pts/gd/gf maps
   function simulateGroup(teams) {
     const pts = {};
     const gd  = {};
-    for (const t of teams) { pts[t] = 0; gd[t] = 0; }
+    const gf  = {};
+    for (const t of teams) { pts[t] = 0; gd[t] = 0; gf[t] = 0; }
 
     for (let i = 0; i < teams.length; i++) {
       for (let j = i + 1; j < teams.length; j++) {
@@ -2362,17 +2368,17 @@ function simulateTournamentReach(n = 3000) {
         if (gA > gB) { pts[tA] += 3; }
         else if (gA < gB) { pts[tB] += 3; }
         else { pts[tA]++; pts[tB]++; }
-        gd[tA] += gA - gB;
-        gd[tB] += gB - gA;
+        gd[tA] += gA - gB; gd[tB] += gB - gA;
+        gf[tA] += gA;      gf[tB] += gB;
       }
     }
 
-    const sorted = [...teams].sort((a, b) => pts[b] - pts[a] || gd[b] - gd[a]);
-    return { sorted, pts, gd };
+    const sorted = [...teams].sort((a, b) => pts[b] - pts[a] || gd[b] - gd[a] || gf[b] - gf[a]);
+    return { sorted, pts, gd, gf };
   }
 
   for (let sim = 0; sim < n; sim++) {
-    const groupResults = {}; // letter → { sorted, pts, gd }
+    const groupResults = {}; // letter → { sorted, pts, gd, gf }
     for (const [letter, teams] of Object.entries(WC_GROUPS)) {
       groupResults[letter] = simulateGroup(teams);
     }
@@ -2383,14 +2389,19 @@ function simulateTournamentReach(n = 3000) {
       counts[sorted[1]].advance++;
     }
 
-    // Collect third-place teams with their points for best-8 selection
-    const thirdPlaceTeams = Object.entries(groupResults).map(([letter, { sorted, pts }]) => ({
-      team: sorted[2], pts: pts[sorted[2]], letter,
+    // Collect all 12 third-place teams; rank by pts → GD → GF; best 8 advance
+    const thirdPlaceTeams = Object.entries(groupResults).map(([letter, { sorted, pts, gd, gf }]) => ({
+      team: sorted[2],
+      pts:  pts[sorted[2]],
+      gd:   gd[sorted[2]],
+      gf:   gf[sorted[2]],
+      letter,
     }));
-
-    // Sort third-place teams by pts desc, take best 8
-    thirdPlaceTeams.sort((a, b) => b.pts - a.pts);
+    thirdPlaceTeams.sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf);
     const b8 = thirdPlaceTeams.slice(0, 8).map(x => x.team);
+
+    // Credit the 8 best third-place teams with an advance
+    for (const t of b8) counts[t].advance++;
 
     // R32 bracket — 16 matches
     // Matches 1-8: Group winners A-H vs b8[0]-b8[7]
@@ -2483,8 +2494,13 @@ let _intlResultsExpires = 0;
 
 // Name aliases: our team name → martj42 dataset spelling
 const MARTJ42_ALIAS = {
-  'USA':               'United States',
-  'Trinidad & Tobago': 'Trinidad and Tobago',
+  'USA':                    'United States',
+  'Trinidad & Tobago':      'Trinidad and Tobago',
+  'Bosnia & Herzegovina':   'Bosnia and Herzegovina',
+  'Curaçao':                'Curacao',
+  "Côte d'Ivoire":          'Ivory Coast',
+  'Cabo Verde':             'Cape Verde',
+  'DR Congo':               'DR Congo',  // martj42 uses this exact name
 };
 function toMartj42(name) { return MARTJ42_ALIAS[name] ?? name; }
 
@@ -2583,68 +2599,67 @@ function getH2HData(results, homeAlias, awayAlias) {
 
 // ─── Golden Boot Predictor ───────────────────────────────────────────────────
 
-// All teams verified against the hardcoded WC_GROUPS 48-team draw.
+// All teams verified against confirmed WC_GROUPS 2026 draw.
 // No player from an unqualified nation is included.
-// Squads are assumed based on current international form — will be updated once
-// official WC 2026 squads are announced in May/June 2026.
+// Squads based on current international form — updated once official 2026 squads announced.
 const WC_STRIKERS = [
-  // Group A
-  { name: 'Christian Pulisic',  team: 'USA',          share: 0.24 },
-  { name: 'Ismael Díaz',        team: 'Panama',       share: 0.34 },
-  // Group B
-  { name: 'Santiago Giménez',   team: 'Mexico',       share: 0.30 },
-  { name: 'Son Heung-min',      team: 'South Korea',  share: 0.28 },
-  // Group C
-  { name: 'Jonathan David',     team: 'Canada',       share: 0.30 },
-  { name: 'Darwin Núñez',       team: 'Uruguay',      share: 0.30 },
-  { name: 'El Bilal Touré',     team: 'Mali',         share: 0.32 },
-  { name: 'Eldor Shomurodov',   team: 'Uzbekistan',   share: 0.30 },
-  // Group D
-  { name: 'Álvaro Morata',      team: 'Spain',        share: 0.24 },
-  { name: 'Mikel Oyarzabal',    team: 'Spain',        share: 0.18 },
-  { name: 'Ayase Ueda',         team: 'Japan',        share: 0.32 },
-  // Group E
-  { name: 'Kai Havertz',        team: 'Germany',      share: 0.26 },
-  { name: 'Florian Wirtz',      team: 'Germany',      share: 0.18 },
-  { name: 'Luis Díaz',          team: 'Colombia',     share: 0.24 },
-  { name: 'Enner Valencia',     team: 'Ecuador',      share: 0.32 },
-  // Group F
-  { name: 'Cristiano Ronaldo',  team: 'Portugal',     share: 0.30 },
-  { name: 'Gonçalo Ramos',      team: 'Portugal',     share: 0.22 },
-  { name: 'Lautaro Martínez',   team: 'Argentina',    share: 0.28 },
-  { name: 'Julián Álvarez',     team: 'Argentina',    share: 0.20 },
-  { name: 'Chris Wood',         team: 'New Zealand',  share: 0.40 },
-  // Group G
-  { name: 'Kylian Mbappé',      team: 'France',       share: 0.40 },
-  { name: 'Antoine Griezmann',  team: 'France',       share: 0.18 },
-  { name: 'Romelu Lukaku',      team: 'Belgium',      share: 0.32 },
-  { name: 'Vinicius Jr.',       team: 'Brazil',       share: 0.27 },
-  { name: 'Rodrygo',            team: 'Brazil',       share: 0.18 },
-  // Group H
-  { name: 'Harry Kane',         team: 'England',      share: 0.33 },
-  { name: 'Bukayo Saka',        team: 'England',      share: 0.18 },
-  { name: 'Cody Gakpo',         team: 'Netherlands',  share: 0.26 },
-  { name: 'Memphis Depay',      team: 'Netherlands',  share: 0.22 },
-  { name: 'Sadio Mané',         team: 'Senegal',      share: 0.28 },
-  { name: 'Ismaila Sarr',       team: 'Senegal',      share: 0.20 },
-  { name: 'Roman Yaremchuk',    team: 'Ukraine',      share: 0.28 },
-  // Group I
-  { name: 'Youssef En-Nesyri',  team: 'Morocco',      share: 0.30 },
-  { name: 'Andrej Kramarić',    team: 'Croatia',      share: 0.26 },
-  { name: 'Rasmus Højlund',     team: 'Denmark',      share: 0.30 },
-  { name: 'Victor Osimhen',     team: 'Nigeria',      share: 0.32 },
-  // Group J
-  { name: 'Ciro Immobile',      team: 'Italy',        share: 0.28 },
-  { name: 'Mathew Leckie',      team: 'Australia',    share: 0.24 },
-  { name: 'Mohammed Kudus',     team: 'Ghana',        share: 0.30 },
-  // Group K
-  { name: 'Mehdi Taremi',       team: 'Iran',         share: 0.32 },
-  { name: 'Breel Embolo',       team: 'Switzerland',  share: 0.30 },
-  { name: 'Vincent Aboubakar',  team: 'Cameroon',     share: 0.34 },
-  // Group L
-  { name: 'Dušan Vlahović',     team: 'Serbia',       share: 0.30 },
-  { name: 'Arda Güler',         team: 'Turkey',       share: 0.24 },
-  { name: 'Salem Al-Dawsari',   team: 'Saudi Arabia', share: 0.28 },
+  // Group A — Mexico, South Africa, South Korea, Czech Republic
+  { name: 'Santiago Giménez',   team: 'Mexico',                share: 0.30 },
+  { name: 'Son Heung-min',      team: 'South Korea',           share: 0.28 },
+  { name: 'Patrik Schick',      team: 'Czech Republic',        share: 0.32 },
+  // Group B — Canada, Bosnia & Herzegovina, Qatar, Switzerland
+  { name: 'Jonathan David',     team: 'Canada',                share: 0.30 },
+  { name: 'Edin Džeko',         team: 'Bosnia & Herzegovina',  share: 0.28 },
+  { name: 'Breel Embolo',       team: 'Switzerland',           share: 0.30 },
+  // Group C — Brazil, Morocco, Haiti, Scotland
+  { name: 'Vinicius Jr.',       team: 'Brazil',                share: 0.27 },
+  { name: 'Rodrygo',            team: 'Brazil',                share: 0.18 },
+  { name: 'Youssef En-Nesyri',  team: 'Morocco',               share: 0.30 },
+  // Group D — United States, Paraguay, Australia, Turkey
+  { name: 'Christian Pulisic',  team: 'United States',         share: 0.24 },
+  { name: 'Mathew Leckie',      team: 'Australia',             share: 0.24 },
+  { name: 'Arda Güler',         team: 'Turkey',                share: 0.26 },
+  { name: 'Enes Ünal',          team: 'Turkey',                share: 0.20 },
+  // Group E — Germany, Curaçao, Côte d'Ivoire, Ecuador
+  { name: 'Kai Havertz',        team: 'Germany',               share: 0.26 },
+  { name: 'Florian Wirtz',      team: 'Germany',               share: 0.18 },
+  { name: 'Enner Valencia',     team: 'Ecuador',               share: 0.32 },
+  // Group F — Netherlands, Japan, Sweden, Tunisia
+  { name: 'Cody Gakpo',         team: 'Netherlands',           share: 0.26 },
+  { name: 'Memphis Depay',      team: 'Netherlands',           share: 0.22 },
+  { name: 'Ayase Ueda',         team: 'Japan',                 share: 0.32 },
+  { name: 'Alexander Isak',     team: 'Sweden',                share: 0.35 },
+  // Group G — Belgium, Egypt, Iran, New Zealand
+  { name: 'Romelu Lukaku',      team: 'Belgium',               share: 0.32 },
+  { name: 'Mohamed Salah',      team: 'Egypt',                 share: 0.38 },
+  { name: 'Mehdi Taremi',       team: 'Iran',                  share: 0.32 },
+  { name: 'Chris Wood',         team: 'New Zealand',           share: 0.40 },
+  // Group H — Spain, Cabo Verde, Saudi Arabia, Uruguay
+  { name: 'Álvaro Morata',      team: 'Spain',                 share: 0.24 },
+  { name: 'Mikel Oyarzabal',    team: 'Spain',                 share: 0.18 },
+  { name: 'Darwin Núñez',       team: 'Uruguay',               share: 0.30 },
+  { name: 'Salem Al-Dawsari',   team: 'Saudi Arabia',          share: 0.28 },
+  // Group I — France, Senegal, Iraq, Norway
+  { name: 'Kylian Mbappé',      team: 'France',                share: 0.40 },
+  { name: 'Antoine Griezmann',  team: 'France',                share: 0.18 },
+  { name: 'Sadio Mané',         team: 'Senegal',               share: 0.28 },
+  { name: 'Ismaila Sarr',       team: 'Senegal',               share: 0.20 },
+  { name: 'Erling Haaland',     team: 'Norway',                share: 0.42 },
+  // Group J — Argentina, Algeria, Austria, Jordan
+  { name: 'Lautaro Martínez',   team: 'Argentina',             share: 0.28 },
+  { name: 'Julián Álvarez',     team: 'Argentina',             share: 0.20 },
+  { name: 'Riyad Mahrez',       team: 'Algeria',               share: 0.30 },
+  // Group K — Portugal, DR Congo, Uzbekistan, Colombia
+  { name: 'Cristiano Ronaldo',  team: 'Portugal',              share: 0.30 },
+  { name: 'Gonçalo Ramos',      team: 'Portugal',              share: 0.22 },
+  { name: 'Eldor Shomurodov',   team: 'Uzbekistan',            share: 0.30 },
+  { name: 'Luis Díaz',          team: 'Colombia',              share: 0.24 },
+  // Group L — England, Croatia, Ghana, Panama
+  { name: 'Harry Kane',         team: 'England',               share: 0.33 },
+  { name: 'Bukayo Saka',        team: 'England',               share: 0.18 },
+  { name: 'Andrej Kramarić',    team: 'Croatia',               share: 0.26 },
+  { name: 'Mohammed Kudus',     team: 'Ghana',                 share: 0.30 },
+  { name: 'Ismael Díaz',        team: 'Panama',                share: 0.34 },
 ];
 
 function computeGoldenBoot(reach) {
@@ -2692,25 +2707,77 @@ function _buildPrePredictions() {
     }
     groupMatchPredictions[letter] = matches;
 
-    // Expected points: P(win)×3 + P(draw)×1 per match, summed over 3 games.
-    // Use Math.floor so stochastic rounding never pushes a value past 9.
-    // Also hard-clamp to [0, 9] as a safety guard.
-    const xPts = {};
-    const xGD  = {};
-    for (const t of teams) { xPts[t] = 0; xGD[t] = 0; }
-    for (const m of matches) {
-      xPts[m.home] += m.homeWin * 3 + m.draw;
-      xPts[m.away] += m.awayWin * 3 + m.draw;
-      xGD[m.home]  += m.lambdaHome - m.lambdaAway;
-      xGD[m.away]  += m.lambdaAway - m.lambdaHome;
+    // Monte Carlo: simulate the group N times with real 3/1/0 points.
+    //
+    // Strategy: medoid selection.
+    // 1. Run MC_N simulations, storing every full 4-team points vector.
+    // 2. Compute each team's median points across all runs independently.
+    // 3. Find the actual simulation run whose vector is closest (min L1) to
+    //    that per-team median vector — the "medoid".
+    //
+    // This gives a realistic, internally consistent outcome:
+    //   • Values come from one real run → wins always equal losses, sum ∈ [12,18]
+    //   • Reflects the typical (median) distribution, not just the clean dominant
+    //     outcome, so balanced groups show spreads like 6/5/4/3 rather than 9/6/3/0
+    const MC_N = 10000;
+    function poissonDrawLocal(lambda) {
+      const L = Math.exp(-lambda);
+      let k = 0, p = 1;
+      do { k++; p *= Math.random(); } while (p > L);
+      return k - 1;
     }
 
+    const allSims  = new Array(MC_N); // allSims[s] = [pts_t0, pts_t1, pts_t2, pts_t3]
+    const ptsLists = teams.map(() => new Array(MC_N)); // per-team list for median
+    const gdSum    = {};
+    for (const t of teams) gdSum[t] = 0;
+
+    for (let sim = 0; sim < MC_N; sim++) {
+      const simPts = {};
+      const simGD  = {};
+      for (const t of teams) { simPts[t] = 0; simGD[t] = 0; }
+
+      for (let i = 0; i < teams.length; i++) {
+        for (let j = i + 1; j < teams.length; j++) {
+          const tA = teams[i], tB = teams[j];
+          const diff = (wcStrength(tA) - wcStrength(tB)) / 400;
+          const lA   = Math.max(0.3, 1.30 * Math.exp( diff * 1.1));
+          const lB   = Math.max(0.3, 1.30 * Math.exp(-diff * 1.1));
+          const gA   = poissonDrawLocal(lA);
+          const gB   = poissonDrawLocal(lB);
+          if      (gA > gB) { simPts[tA] += 3; }
+          else if (gA < gB) { simPts[tB] += 3; }
+          else              { simPts[tA]++;  simPts[tB]++; }
+          simGD[tA] += gA - gB;
+          simGD[tB] += gB - gA;
+        }
+      }
+
+      allSims[sim] = teams.map(t => simPts[t]);
+      for (let i = 0; i < teams.length; i++) {
+        ptsLists[i][sim] = simPts[teams[i]];
+        gdSum[teams[i]] += simGD[teams[i]];
+      }
+    }
+
+    // Per-team median (sort each list, pick middle value)
+    const medians = ptsLists.map(list => {
+      const s = list.slice().sort((a, b) => a - b);
+      const m = (MC_N - 1) / 2;
+      return (s[Math.floor(m)] + s[Math.ceil(m)]) / 2;
+    });
+
+    // Medoid: find the actual simulation run closest to the median vector
+    let bestIdx = 0, bestDist = Infinity;
+    for (let s = 0; s < MC_N; s++) {
+      let dist = 0;
+      for (let i = 0; i < teams.length; i++) dist += Math.abs(allSims[s][i] - medians[i]);
+      if (dist < bestDist) { bestDist = dist; bestIdx = s; }
+    }
+    const repPts = allSims[bestIdx]; // representative points vector
+
     groupPredictedStandings[letter] = teams
-      .map(t => ({
-        team: t,
-        xPts: Math.min(9, Math.max(0, Math.floor(xPts[t]))),
-        xGD:  +xGD[t].toFixed(2),
-      }))
+      .map((t, i) => ({ team: t, xPts: repPts[i], xGD: +(gdSum[t] / MC_N).toFixed(2) }))
       .sort((a, b) => b.xPts - a.xPts || b.xGD - a.xGD);
   }
 

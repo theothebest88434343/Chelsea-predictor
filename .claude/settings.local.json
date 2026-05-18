@@ -6,7 +6,13 @@
       "Bash(node --check server.js)",
       "Bash(npx --yes vite build --mode development)",
       "Bash(node --check \"/Users/theosteinstrasser/Documents/Vs Code/chelsea Pred/server.js\")",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "WebSearch",
+      "WebFetch(domain:www.fifa.com)",
+      "WebFetch(domain:worldcupwiki.com)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:www.fifaworldcupnews.com)",
+      "WebFetch(domain:soccer2026.app)"
     ]
   }
 }
