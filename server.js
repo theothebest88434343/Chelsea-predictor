@@ -2,6 +2,18 @@
 
 require('dotenv').config();
 
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('\n🔴 Unhandled Promise Rejection:');
+  console.error(reason);
+  process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('\n🔴 Uncaught Exception:');
+  console.error(err);
+  process.exit(1);
+});
+
 const express   = require('express');
 const cors      = require('cors');
 const axios     = require('axios');
@@ -361,6 +373,24 @@ async function fetchOdds(teamName = null) {
       { maxAttempts: 2, label: 'Odds API' }
     );
 
+    // Odds API → FPL team name mapping (Odds API uses full official names)
+    const ODDS_TO_FPL = {
+      'Tottenham Hotspur': 'Spurs',
+      'Manchester City':   'Man City',
+      'Manchester United': 'Man Utd',
+      'Newcastle United':  'Newcastle',
+      'West Ham United':   'West Ham',
+      'Wolverhampton Wanderers': 'Wolves',
+      'Nottingham Forest': "Nott'm Forest",
+      'Brighton and Hove Albion': 'Brighton',
+      'Leicester City':    'Leicester',
+      'Leeds United':      'Leeds',
+      'Aston Villa':       'Aston Villa',
+      'AFC Bournemouth':   'Bournemouth',
+      'Ipswich Town':      'Ipswich',
+    };
+    const normTeam = name => ODDS_TO_FPL[name] ?? name;
+
     const oddsMap = {};
     for (const game of (res.data ?? [])) {
       const book = game.bookmakers?.[0];
@@ -372,7 +402,8 @@ async function fetchOdds(teamName = null) {
       const awayOut  = h2h.outcomes.find(o => o.name === game.away_team);
       const drawOut  = h2h.outcomes.find(o => o.name === 'Draw');
 
-      const gameKey = `${game.home_team}_${game.away_team}`;
+      // Key uses FPL names so it matches the lookup in buildPrediction
+      const gameKey = `${normTeam(game.home_team)}_${normTeam(game.away_team)}`;
       oddsMap[gameKey] = {
         home:       homeOut?.price ?? null,
         draw:       drawOut?.price ?? null,
@@ -431,8 +462,8 @@ async function fetchSofaScoreNextFixtures() {
 
 // ─── H2H (openfootball) ───────────────────────────────────────────────────────
 
-async function fetchH2H(opponentName) {
-  const cacheKey = `h2h_${opponentName}`;
+async function fetchH2H(opponentName, myTeamName = 'Chelsea FC') {
+  const cacheKey = `h2h_${myTeamName}_${opponentName}`;
   const cached   = getCache(cacheKey);
   if (cached) return cached;
 
@@ -450,8 +481,8 @@ async function fetchH2H(opponentName) {
         for (const round of rounds) {
           for (const m of (round.matches ?? [])) {
             const isH2H = (
-              (m.team1 === 'Chelsea FC' && m.team2 === opponentName) ||
-              (m.team2 === 'Chelsea FC' && m.team1 === opponentName)
+              (m.team1 === myTeamName && m.team2 === opponentName) ||
+              (m.team2 === myTeamName && m.team1 === opponentName)
             );
             if (isH2H) {
               matches.push({
@@ -653,21 +684,25 @@ async function getChelseaInjuries(chelseaId) {
 
 app.get('/api/fixtures', async (req, res) => {
   try {
+    // teamCode defaults to Chelsea (8) for backward compat; clients pass ?teamCode=X for other teams
+    const teamCode = Number(req.query.teamCode) || CHELSEA_CODE;
+    const isChelsea = teamCode === CHELSEA_CODE;
+
     const [[bs, fixtures], sofaEvents] = await Promise.all([
       Promise.all([fetchBootstrap(), fetchFixtures()]),
-      fetchSofaScoreNextFixtures(),
+      isChelsea ? fetchSofaScoreNextFixtures() : Promise.resolve([]),
     ]);
     const { teams, events } = bs;
-    const chelseaId = (teams.find(t => t.code === CHELSEA_CODE))?.id;
+    const teamId = (teams.find(t => t.code === teamCode))?.id;
 
-      const plUpcoming = fixtures
-      .filter(f => !f.finished && (f.team_h === chelseaId || f.team_a === chelseaId))
+    const plUpcoming = fixtures
+      .filter(f => !f.finished && (f.team_h === teamId || f.team_a === teamId))
       .sort((a, b) => new Date(a.kickoff_time) - new Date(b.kickoff_time))
       .slice(0, 10)
       .map(f => ({ ...enrichFixture(f, teams, events), competition: 'Premier League', isCup: false }));
 
-    // SofaScore cup fixtures — excluded if tournament slug contains "premier-league"
-    const cupFixtures = sofaEvents
+    // SofaScore cup fixtures — only available for Chelsea right now
+    const cupFixtures = isChelsea ? sofaEvents
       .filter(e => {
         const slug = (e.tournament?.slug ?? e.tournament?.uniqueTournament?.slug ?? '').toLowerCase();
         return !slug.includes('premier-league') && !slug.includes('premier_league');
@@ -697,28 +732,7 @@ app.get('/api/fixtures', async (req, res) => {
           competition: e.tournament?.name ?? 'Cup',
           isCup:       true,
         };
-      });
-
-    // If no FA Cup fixture found from SofaScore, add a placeholder
-    const hasFaCup = cupFixtures.some(f =>
-      (f.competition ?? '').toLowerCase().includes('fa cup')
-    );
-    if (!hasFaCup) {
-      cupFixtures.push({
-        id:          'sofa_facup_placeholder',
-        gameweek:    null,
-        kickoffTime: null,
-        finished:    false,
-        started:     false,
-        homeTeam:    { id: null, name: 'TBC', shortName: 'TBC', code: null },
-        awayTeam:    { id: SOFASCORE_CHELSEA_ID, name: 'Chelsea', shortName: 'CHE', code: CHELSEA_CODE },
-        homeScore:   null,
-        awayScore:   null,
-        competition: 'FA Cup Final',
-        isCup:       true,
-        placeholder: true,
-      });
-    }
+      }) : [];
 
     const seen = new Set();
     const merged = [...plUpcoming, ...cupFixtures]
@@ -737,16 +751,36 @@ app.get('/api/fixtures', async (req, res) => {
   }
 });
 
+// ─── Route: GET /api/all-fixtures ────────────────────────────────────────────
+// All upcoming PL fixtures (not Chelsea-specific). Used by the team-agnostic
+// Fixtures page — returns every game sorted by kickoff time.
+
+app.get('/api/all-fixtures', async (req, res) => {
+  try {
+    const [bs, fixtures] = await Promise.all([fetchBootstrap(), fetchFixtures()]);
+    const { teams, events } = bs;
+    const upcoming = fixtures
+      .filter(f => !f.finished)
+      .sort((a, b) => new Date(a.kickoff_time) - new Date(b.kickoff_time))
+      .map(f => ({ ...enrichFixture(f, teams, events), isCup: false }));
+    res.json(upcoming);
+  } catch (err) {
+    console.error('[/api/all-fixtures]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Route: GET /api/results ──────────────────────────────────────────────────
 
 app.get('/api/results', async (req, res) => {
   try {
+    const teamCode = Number(req.query.teamCode) || CHELSEA_CODE;
     const [bs, fixtures] = await Promise.all([fetchBootstrap(), fetchFixtures()]);
     const { teams, events } = bs;
-    const chelseaId = (teams.find(t => t.code === CHELSEA_CODE))?.id;
+    const teamId = (teams.find(t => t.code === teamCode))?.id;
 
     const results = fixtures
-      .filter(f => f.finished && (f.team_h === chelseaId || f.team_a === chelseaId))
+      .filter(f => f.finished && (f.team_h === teamId || f.team_a === teamId))
       .sort((a, b) => new Date(b.kickoff_time) - new Date(a.kickoff_time))
       .slice(0, 10)
       .map(f => enrichFixture(f, teams, events));
@@ -800,6 +834,70 @@ app.get('/api/standings', async (req, res) => {
   }
 });
 
+// ─── Route: GET /api/team-form?teamId=<id> ───────────────────────────────────
+// Returns last-5 results (recentResults) for any team — used by FormChart.
+
+app.get('/api/team-form', async (req, res) => {
+  try {
+    const teamId = Number(req.query.teamId);
+    if (!teamId) return res.status(400).json({ error: 'teamId query param required' });
+    const [bs, fixtures] = await Promise.all([fetchBootstrap(), fetchFixtures()]);
+    const formData = await buildFormData(fixtures, bs.teams, null);
+    const form = formData[teamId];
+    if (!form) return res.status(404).json({ error: 'Team not found' });
+    res.json({
+      recentResults: form.recentResults ?? [],
+      // Include W/D/L summary
+      record: (() => {
+        const r = form.recentResults ?? [];
+        return r.map(({ homeGoals, awayGoals }) =>
+          homeGoals > awayGoals ? 'W' : homeGoals === awayGoals ? 'D' : 'L'
+        ).join('');
+      })(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Route: GET /api/lineup?fixtureId=<id> ───────────────────────────────────
+// Returns predicted lineup for SofaScore-sourced cup fixtures.
+// FPL numeric fixtures have no lineup data — returns { available: false }.
+
+app.get('/api/lineup', async (req, res) => {
+  try {
+    const { fixtureId } = req.query;
+    if (!fixtureId) return res.status(400).json({ error: 'fixtureId required' });
+
+    // Only SofaScore fixtures carry lineup data
+    if (!String(fixtureId).startsWith('sofa_')) {
+      return res.json({ available: false });
+    }
+
+    const eventId  = String(fixtureId).replace('sofa_', '');
+    const lineupData = await fetchSofaScoreLineup(eventId);
+    if (!lineupData?.home || !lineupData?.away) return res.json({ available: false });
+
+    const parseLineup = (side) => {
+      const formation = side.formation ?? '4-3-3';
+      const players   = {};
+      (side.players ?? []).forEach(p => {
+        const pos = p.position ?? p.player?.position ?? '';
+        if (pos) players[pos.toUpperCase()] = p.player?.shortName ?? p.player?.name ?? '';
+      });
+      return { formation, players };
+    };
+
+    res.json({
+      available: true,
+      home: parseLineup(lineupData.home),
+      away: parseLineup(lineupData.away),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Route: GET /api/teams ────────────────────────────────────────────────────
 
 app.get('/api/teams', async (req, res) => {
@@ -813,29 +911,38 @@ app.get('/api/teams', async (req, res) => {
 
 // ─── Route: GET /api/chelsea-stats ────────────────────────────────────────────
 
+// Legacy alias — kept for backward compat; prefer /api/team-stats?teamCode=8
 app.get('/api/chelsea-stats', async (req, res) => {
+  req.query.teamCode = req.query.teamCode || String(CHELSEA_CODE);
+  return teamStatsHandler(req, res);
+});
+
+// ─── Route: GET /api/team-stats?teamCode=<code> ───────────────────────────────
+
+async function teamStatsHandler(req, res) {
   try {
+    const teamCode = Number(req.query.teamCode) || CHELSEA_CODE;
     const [bs, fixtures] = await Promise.all([fetchBootstrap(), fetchFixtures()]);
     const { teams, elements } = bs;
-    const chelseaId   = (teams.find(t => t.code === CHELSEA_CODE))?.id;
-    const finished    = fixtures.filter(f => f.finished && (f.team_h === chelseaId || f.team_a === chelseaId));
+    const teamId   = (teams.find(t => t.code === teamCode))?.id;
+    const finished = fixtures.filter(f => f.finished && (f.team_h === teamId || f.team_a === teamId));
 
     let won = 0, drawn = 0, lost = 0, gf = 0, ga = 0;
     let homeWon = 0, homeDrawn = 0, homeLost = 0;
     let awayWon = 0, awayDrawn = 0, awayLost = 0;
 
     for (const f of finished) {
-      const isHome = f.team_h === chelseaId;
+      const isHome = f.team_h === teamId;
       const cg     = isHome ? f.team_h_score : f.team_a_score;
       const og     = isHome ? f.team_a_score : f.team_h_score;
       gf += cg; ga += og;
-      if (cg > og)      { won++;   isHome ? homeWon++   : awayWon++;   }
+      if (cg > og)        { won++;   isHome ? homeWon++   : awayWon++;   }
       else if (cg === og) { drawn++; isHome ? homeDrawn++ : awayDrawn++; }
-      else              { lost++;  isHome ? homeLost++  : awayLost++;  }
+      else                { lost++;  isHome ? homeLost++  : awayLost++;  }
     }
 
     const squad = (elements ?? [])
-      .filter(p => p.team === chelseaId)
+      .filter(p => p.team === teamId)
       .sort((a, b) => b.goals_scored - a.goals_scored)
       .slice(0, 5)
       .map(p => ({ name: p.web_name, goals: p.goals_scored, assists: p.assists }));
@@ -850,15 +957,18 @@ app.get('/api/chelsea-stats', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}
+
+app.get('/api/team-stats', teamStatsHandler);
 
 // ─── Route: GET /api/injuries ─────────────────────────────────────────────────
 
 app.get('/api/injuries', async (req, res) => {
   try {
+    const teamCode  = Number(req.query.teamCode) || CHELSEA_CODE;
     const bs        = await fetchBootstrap();
-    const chelseaId = (bs.teams.find(t => t.code === CHELSEA_CODE))?.id;
-    const injuries  = await getChelseaInjuries(chelseaId);
+    const teamId    = (bs.teams.find(t => t.code === teamCode))?.id;
+    const injuries  = await getChelseaInjuries(teamId);
     res.json(injuries);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -869,11 +979,14 @@ app.get('/api/injuries', async (req, res) => {
 
 app.get('/api/h2h/:opponentId', async (req, res) => {
   try {
+    const teamCode = Number(req.query.teamCode) || CHELSEA_CODE;
     const bs = await fetchBootstrap();
     const opponent = bs.teams.find(t => t.id === Number(req.params.opponentId));
     if (!opponent) return res.status(404).json({ error: 'Team not found' });
+    const myTeam = bs.teams.find(t => t.code === teamCode);
+    const myTeamName = myTeam?.name ?? 'Chelsea FC';
 
-    const h2h = await fetchH2H(opponent.name);
+    const h2h = await fetchH2H(opponent.name, myTeamName);
     res.json(h2h);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1325,16 +1438,19 @@ Write the report now. Paragraph 1: form and context. Paragraph 2: the key tactic
 
 app.get('/api/opponent-analysis', async (req, res) => {
   try {
-    const teamId = Number(req.query.teamId);
+    const teamId    = Number(req.query.teamId);
+    const myTeamCode = Number(req.query.myTeamCode) || CHELSEA_CODE;
     if (!teamId) return res.status(400).json({ error: 'teamId required' });
 
-    const cacheKey = `opp_${teamId}`;
+    const cacheKey = `opp_${myTeamCode}_${teamId}`;
     const cached   = getCache(cacheKey);
     if (cached) return res.json(cached);
 
     const [bs, allFixtures] = await Promise.all([fetchBootstrap(), fetchFixtures()]);
     const { teams, elements } = bs;
     const team    = teams.find(t => t.id === teamId);
+    const myTeam  = teams.find(t => t.code === myTeamCode);
+    const myTeamName = myTeam?.name ?? 'Chelsea';
     if (!team) return res.status(404).json({ error: 'Team not found' });
 
     const squad   = (elements ?? []).filter(p => p.team === teamId);
@@ -1367,10 +1483,10 @@ app.get('/api/opponent-analysis', async (req, res) => {
         return s;
       }).join(', ');
 
-    const systemPrompt = `You are an elite Premier League scout writing for Chelsea's coaching staff. Be sharp, specific, and analytical — no fluff.
+    const systemPrompt = `You are an elite Premier League scout writing for ${myTeamName}'s coaching staff. Be sharp, specific, and analytical — no fluff.
 Use **bold** for key names and stats. Under 280 words.
 ABSOLUTE RULE: ONLY name players from the roster list provided. Never invent or recall players who may have left the club. No scores, probabilities, or scorelines.`;
-    const userPrompt   = `Scout report: ${team.name} as Chelsea's upcoming opponent.
+    const userPrompt   = `Scout report: ${team.name} as ${myTeamName}'s upcoming opponent.
 Last 5 form: ${formStr}
 Top scorer: ${topScorer ? `${topScorer.first_name} ${topScorer.second_name}` : 'Unknown'} (${topScorer?.goals_scored ?? 0} goals, ${topScorer?.assists ?? 0} assists)
 Confirmed injuries/doubts: ${injuries.map(p => `${p.first_name} ${p.second_name}`).join(', ') || 'None reported'}
@@ -1378,7 +1494,7 @@ Confirmed injuries/doubts: ${injuries.map(p => `${p.first_name} ${p.second_name}
 Current squad (ONLY name players from this list):
 ${oppRoster}
 
-Cover in 3 tight paragraphs: (1) their attacking threat and key danger man, (2) defensive weaknesses Chelsea can exploit, (3) set-piece danger, pressing triggers, and the one tactical battle that will decide the game.`;
+Cover in 3 tight paragraphs: (1) their attacking threat and key danger man, (2) defensive weaknesses ${myTeamName} can exploit, (3) set-piece danger, pressing triggers, and the one tactical battle that will decide the game.`;
 
     const analysis = await groqChat([
       { role: 'system', content: systemPrompt },
@@ -1516,8 +1632,10 @@ app.get('/api/season-accuracy', async (req, res) => {
     const cached = getCache('season_accuracy');
     if (cached) return res.json(cached);
 
-    const completed = history.predictions.filter(p => p.result && p.prediction);
-    const total     = completed.length;
+    const completed = history.predictions.filter(p =>
+      p.result && p.prediction && p.gameweek && p.gameweek > 1
+    );
+    const total = completed.length;
     if (total === 0) return res.json({ total: 0, correct: 0, accuracy: 0, byGW: [] });
 
     let correct = 0;
@@ -1568,7 +1686,9 @@ app.get('/api/season-accuracy', async (req, res) => {
 
 app.get('/api/performance-metrics', async (req, res) => {
   try {
-    const completed = history.predictions.filter(p => p.result && p.prediction);
+    const completed = history.predictions.filter(p =>
+      p.result && p.prediction && p.gameweek && p.gameweek > 1
+    );
     if (completed.length === 0) return res.json({ message: 'No completed predictions yet' });
 
     const predictions = completed.map(p => ({
@@ -1593,7 +1713,8 @@ app.get('/api/performance-metrics', async (req, res) => {
 app.get('/api/betting-sim', async (req, res) => {
   try {
     const stake  = Number(req.query.stake) || 10;
-    const result = bettingSimulator(history.predictions, stake);
+    const valid  = history.predictions.filter(p => p.gameweek && p.gameweek > 1);
+    const result = bettingSimulator(valid, stake);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2181,6 +2302,106 @@ const WC_GROUPS = {
   K: ['Portugal',       'DR Congo',              'Uzbekistan',     'Colombia'],
   L: ['England',        'Croatia',               'Ghana',          'Panama'],
 };
+
+// ─── Full group-stage schedule (all 72 matches, UTC kickoffs) ─────────────────
+// Team names must match WC_GROUPS exactly.  Venues are the confirmed host stadiums.
+const WC_SCHEDULE = [
+  // ── Group A ─────────────────────────────────────────────────────────────────
+  { group:'A', md:1, home:'Mexico',         away:'South Africa',         kickoff:'2026-06-11T19:00:00Z', venue:'Estadio Azteca',          city:'Mexico City' },
+  { group:'A', md:1, home:'South Korea',    away:'Czech Republic',       kickoff:'2026-06-12T02:00:00Z', venue:'Estadio Akron',           city:'Zapopan' },
+  { group:'A', md:2, home:'Czech Republic', away:'South Africa',         kickoff:'2026-06-18T16:00:00Z', venue:'Mercedes-Benz Stadium',   city:'Atlanta' },
+  { group:'A', md:2, home:'Mexico',         away:'South Korea',          kickoff:'2026-06-19T01:00:00Z', venue:'Estadio Akron',           city:'Zapopan' },
+  { group:'A', md:3, home:'South Africa',   away:'South Korea',          kickoff:'2026-06-25T01:00:00Z', venue:'Estadio BBVA',            city:'Guadalupe' },
+  { group:'A', md:3, home:'Czech Republic', away:'Mexico',               kickoff:'2026-06-25T01:00:00Z', venue:'Estadio Azteca',          city:'Mexico City' },
+
+  // ── Group B ─────────────────────────────────────────────────────────────────
+  { group:'B', md:1, home:'Canada',              away:'Bosnia & Herzegovina', kickoff:'2026-06-12T19:00:00Z', venue:'BMO Field',            city:'Toronto' },
+  { group:'B', md:1, home:'Qatar',               away:'Switzerland',          kickoff:'2026-06-13T19:00:00Z', venue:"Levi's Stadium",       city:'Santa Clara' },
+  { group:'B', md:2, home:'Switzerland',         away:'Bosnia & Herzegovina', kickoff:'2026-06-18T19:00:00Z', venue:'SoFi Stadium',         city:'Inglewood' },
+  { group:'B', md:2, home:'Canada',              away:'Qatar',                kickoff:'2026-06-18T22:00:00Z', venue:'BC Place',             city:'Vancouver' },
+  { group:'B', md:3, home:'Bosnia & Herzegovina',away:'Qatar',               kickoff:'2026-06-24T19:00:00Z', venue:'Lumen Field',           city:'Seattle' },
+  { group:'B', md:3, home:'Switzerland',         away:'Canada',               kickoff:'2026-06-24T19:00:00Z', venue:'BC Place',             city:'Vancouver' },
+
+  // ── Group C ─────────────────────────────────────────────────────────────────
+  { group:'C', md:1, home:'Brazil',   away:'Morocco',  kickoff:'2026-06-13T22:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
+  { group:'C', md:1, home:'Haiti',    away:'Scotland', kickoff:'2026-06-14T01:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
+  { group:'C', md:2, home:'Scotland', away:'Morocco',  kickoff:'2026-06-19T22:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
+  { group:'C', md:2, home:'Brazil',   away:'Haiti',    kickoff:'2026-06-20T01:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
+  { group:'C', md:3, home:'Scotland', away:'Brazil',   kickoff:'2026-06-24T22:00:00Z', venue:'Hard Rock Stadium',       city:'Miami Gardens' },
+  { group:'C', md:3, home:'Morocco',  away:'Haiti',    kickoff:'2026-06-24T22:00:00Z', venue:'Mercedes-Benz Stadium',   city:'Atlanta' },
+
+  // ── Group D ─────────────────────────────────────────────────────────────────
+  { group:'D', md:1, home:'United States', away:'Paraguay',       kickoff:'2026-06-13T01:00:00Z', venue:'SoFi Stadium',    city:'Inglewood' },
+  { group:'D', md:1, home:'Australia',     away:'Turkey',         kickoff:'2026-06-14T01:00:00Z', venue:'BC Place',        city:'Vancouver' },
+  { group:'D', md:2, home:'Turkey',        away:'Paraguay',       kickoff:'2026-06-19T04:00:00Z', venue:"Levi's Stadium",  city:'Santa Clara' },
+  { group:'D', md:2, home:'United States', away:'Australia',      kickoff:'2026-06-19T19:00:00Z', venue:'Lumen Field',     city:'Seattle' },
+  { group:'D', md:3, home:'Turkey',        away:'United States',  kickoff:'2026-06-26T02:00:00Z', venue:'SoFi Stadium',    city:'Inglewood' },
+  { group:'D', md:3, home:'Paraguay',      away:'Australia',      kickoff:'2026-06-26T02:00:00Z', venue:"Levi's Stadium",  city:'Santa Clara' },
+
+  // ── Group E ─────────────────────────────────────────────────────────────────
+  { group:'E', md:1, home:'Germany',        away:'Curaçao',       kickoff:'2026-06-14T17:00:00Z', venue:'NRG Stadium',             city:'Houston' },
+  { group:'E', md:1, home:"Côte d'Ivoire",  away:'Ecuador',       kickoff:'2026-06-14T23:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
+  { group:'E', md:2, home:'Germany',        away:"Côte d'Ivoire", kickoff:'2026-06-20T20:00:00Z', venue:'BMO Field',               city:'Toronto' },
+  { group:'E', md:2, home:'Ecuador',        away:'Curaçao',       kickoff:'2026-06-21T00:00:00Z', venue:'Arrowhead Stadium',       city:'Kansas City' },
+  { group:'E', md:3, home:'Ecuador',        away:'Germany',       kickoff:'2026-06-25T20:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
+  { group:'E', md:3, home:'Curaçao',        away:"Côte d'Ivoire", kickoff:'2026-06-25T20:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
+
+  // ── Group F ─────────────────────────────────────────────────────────────────
+  { group:'F', md:1, home:'Netherlands', away:'Japan',    kickoff:'2026-06-14T20:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
+  { group:'F', md:1, home:'Sweden',      away:'Tunisia',  kickoff:'2026-06-15T02:00:00Z', venue:'Estadio BBVA',      city:'Guadalupe' },
+  { group:'F', md:2, home:'Tunisia',     away:'Japan',    kickoff:'2026-06-20T04:00:00Z', venue:'Estadio BBVA',      city:'Guadalupe' },
+  { group:'F', md:2, home:'Netherlands', away:'Sweden',   kickoff:'2026-06-20T17:00:00Z', venue:'NRG Stadium',       city:'Houston' },
+  { group:'F', md:3, home:'Japan',       away:'Sweden',   kickoff:'2026-06-25T23:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
+  { group:'F', md:3, home:'Tunisia',     away:'Netherlands', kickoff:'2026-06-25T23:00:00Z', venue:'Arrowhead Stadium', city:'Kansas City' },
+
+  // ── Group G ─────────────────────────────────────────────────────────────────
+  { group:'G', md:1, home:'Belgium',     away:'Egypt',        kickoff:'2026-06-15T19:00:00Z', venue:'BC Place',     city:'Vancouver' },
+  { group:'G', md:1, home:'Iran',        away:'New Zealand',  kickoff:'2026-06-16T01:00:00Z', venue:'SoFi Stadium', city:'Inglewood' },
+  { group:'G', md:2, home:'Belgium',     away:'Iran',         kickoff:'2026-06-21T19:00:00Z', venue:'SoFi Stadium', city:'Inglewood' },
+  { group:'G', md:2, home:'New Zealand', away:'Egypt',        kickoff:'2026-06-22T01:00:00Z', venue:'BC Place',     city:'Vancouver' },
+  { group:'G', md:3, home:'Egypt',       away:'Iran',         kickoff:'2026-06-27T03:00:00Z', venue:'Lumen Field',  city:'Seattle' },
+  { group:'G', md:3, home:'New Zealand', away:'Belgium',      kickoff:'2026-06-27T03:00:00Z', venue:'BC Place',     city:'Vancouver' },
+
+  // ── Group H ─────────────────────────────────────────────────────────────────
+  { group:'H', md:1, home:'Spain',        away:'Cabo Verde',   kickoff:'2026-06-15T16:00:00Z', venue:'Mercedes-Benz Stadium', city:'Atlanta' },
+  { group:'H', md:1, home:'Saudi Arabia', away:'Uruguay',      kickoff:'2026-06-15T22:00:00Z', venue:'Hard Rock Stadium',     city:'Miami Gardens' },
+  { group:'H', md:2, home:'Spain',        away:'Saudi Arabia', kickoff:'2026-06-21T16:00:00Z', venue:'Mercedes-Benz Stadium', city:'Atlanta' },
+  { group:'H', md:2, home:'Uruguay',      away:'Cabo Verde',   kickoff:'2026-06-21T22:00:00Z', venue:'Hard Rock Stadium',     city:'Miami Gardens' },
+  { group:'H', md:3, home:'Cabo Verde',   away:'Saudi Arabia', kickoff:'2026-06-27T00:00:00Z', venue:'NRG Stadium',           city:'Houston' },
+  { group:'H', md:3, home:'Uruguay',      away:'Spain',        kickoff:'2026-06-27T00:00:00Z', venue:'Estadio Akron',         city:'Zapopan' },
+
+  // ── Group I ─────────────────────────────────────────────────────────────────
+  { group:'I', md:1, home:'France',   away:'Senegal', kickoff:'2026-06-16T19:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
+  { group:'I', md:1, home:'Iraq',     away:'Norway',  kickoff:'2026-06-16T22:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
+  { group:'I', md:2, home:'France',   away:'Iraq',    kickoff:'2026-06-22T21:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
+  { group:'I', md:2, home:'Norway',   away:'Senegal', kickoff:'2026-06-23T00:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
+  { group:'I', md:3, home:'Norway',   away:'France',  kickoff:'2026-06-26T19:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
+  { group:'I', md:3, home:'Senegal',  away:'Iraq',    kickoff:'2026-06-26T19:00:00Z', venue:'BMO Field',               city:'Toronto' },
+
+  // ── Group J ─────────────────────────────────────────────────────────────────
+  { group:'J', md:1, home:'Austria',   away:'Jordan',    kickoff:'2026-06-16T04:00:00Z', venue:"Levi's Stadium",    city:'Santa Clara' },
+  { group:'J', md:1, home:'Argentina', away:'Algeria',   kickoff:'2026-06-17T01:00:00Z', venue:'Arrowhead Stadium', city:'Kansas City' },
+  { group:'J', md:2, home:'Argentina', away:'Austria',   kickoff:'2026-06-22T17:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
+  { group:'J', md:2, home:'Jordan',    away:'Algeria',   kickoff:'2026-06-23T03:00:00Z', venue:"Levi's Stadium",    city:'Santa Clara' },
+  { group:'J', md:3, home:'Algeria',   away:'Austria',   kickoff:'2026-06-28T02:00:00Z', venue:'Arrowhead Stadium', city:'Kansas City' },
+  { group:'J', md:3, home:'Jordan',    away:'Argentina', kickoff:'2026-06-28T02:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
+
+  // ── Group K ─────────────────────────────────────────────────────────────────
+  { group:'K', md:1, home:'Portugal',   away:'DR Congo',   kickoff:'2026-06-17T17:00:00Z', venue:'NRG Stadium',           city:'Houston' },
+  { group:'K', md:1, home:'Uzbekistan', away:'Colombia',   kickoff:'2026-06-18T02:00:00Z', venue:'Estadio Azteca',        city:'Mexico City' },
+  { group:'K', md:2, home:'Portugal',   away:'Uzbekistan', kickoff:'2026-06-23T17:00:00Z', venue:'NRG Stadium',           city:'Houston' },
+  { group:'K', md:2, home:'Colombia',   away:'DR Congo',   kickoff:'2026-06-24T02:00:00Z', venue:'Estadio Akron',         city:'Zapopan' },
+  { group:'K', md:3, home:'Colombia',   away:'Portugal',   kickoff:'2026-06-27T23:30:00Z', venue:'Hard Rock Stadium',     city:'Miami Gardens' },
+  { group:'K', md:3, home:'DR Congo',   away:'Uzbekistan', kickoff:'2026-06-27T23:30:00Z', venue:'Mercedes-Benz Stadium', city:'Atlanta' },
+
+  // ── Group L ─────────────────────────────────────────────────────────────────
+  { group:'L', md:1, home:'England', away:'Croatia', kickoff:'2026-06-17T20:00:00Z', venue:'AT&T Stadium',            city:'Arlington' },
+  { group:'L', md:1, home:'Ghana',   away:'Panama',  kickoff:'2026-06-17T23:00:00Z', venue:'BMO Field',               city:'Toronto' },
+  { group:'L', md:2, home:'England', away:'Ghana',   kickoff:'2026-06-23T20:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
+  { group:'L', md:2, home:'Panama',  away:'Croatia', kickoff:'2026-06-23T23:00:00Z', venue:'BMO Field',               city:'Toronto' },
+  { group:'L', md:3, home:'Panama',  away:'England', kickoff:'2026-06-27T21:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
+  { group:'L', md:3, home:'Croatia', away:'Ghana',   kickoff:'2026-06-27T21:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
+];
 
 // ESPN undocumented JSON endpoints — no key required
 const ESPN_SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
@@ -2916,6 +3137,7 @@ app.get('/api/wc/tournament', async (req, res) => {
       groupFixtures:          [],
       knockoutFixtures:       [],
       hardcodedGroups:        WC_GROUPS,
+      wcSchedule:             WC_SCHEDULE,
       groupMatchPredictions,
       groupPredictedStandings,
       tournamentReach:        simulateTournamentReach(),
@@ -2976,6 +3198,7 @@ app.get('/api/wc/tournament', async (req, res) => {
       groupFixtures:          attachPrePreds(groupFixtures),
       knockoutFixtures:       enrichWithPredictions(knockoutFixtures),
       hardcodedGroups:        WC_GROUPS,
+      wcSchedule:             WC_SCHEDULE,
       preTournamentSavedAt:   prePreds?.savedAt ?? null,
       tournamentReach:        liveTournamentReach,
       goldenBoot:             computeGoldenBoot(liveTournamentReach),
@@ -2983,7 +3206,7 @@ app.get('/api/wc/tournament', async (req, res) => {
     });
   } catch (err) {
     console.error('[WC] Tournament fetch failed:', err.message);
-    res.json({ phase: 'PRE_TOURNAMENT', groups: {}, groupFixtures: [], knockoutFixtures: [], hardcodedGroups: WC_GROUPS, hasLiveData: false });
+    res.json({ phase: 'PRE_TOURNAMENT', groups: {}, groupFixtures: [], knockoutFixtures: [], hardcodedGroups: WC_GROUPS, wcSchedule: WC_SCHEDULE, hasLiveData: false });
   }
 });
 

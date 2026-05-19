@@ -1,11 +1,11 @@
 import { format, parseISO } from 'date-fns';
 
-function MatchRow({ match }) {
+function MatchRow({ match, myTeamName }) {
   const { homeTeam, awayTeam, homeGoals, awayGoals, date, season } = match;
-  const isChelseaHome = homeTeam === 'Chelsea FC';
-  const chelseaGoals  = isChelseaHome ? homeGoals : awayGoals;
-  const oppGoals      = isChelseaHome ? awayGoals : homeGoals;
-  const result        = chelseaGoals > oppGoals ? 'W' : chelseaGoals < oppGoals ? 'L' : 'D';
+  const isMyHome  = homeTeam === myTeamName;
+  const myGoals   = isMyHome ? homeGoals : awayGoals;
+  const oppGoals  = isMyHome ? awayGoals : homeGoals;
+  const result    = myGoals > oppGoals ? 'W' : myGoals < oppGoals ? 'L' : 'D';
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
@@ -27,7 +27,7 @@ function MatchRow({ match }) {
   );
 }
 
-export default function H2HPanel({ h2h = [], loading = false }) {
+export default function H2HPanel({ h2h = [], loading = false, myTeamName = 'Chelsea FC', myTeamShort = 'CHE' }) {
   if (loading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
 
   if (!h2h.length) {
@@ -40,25 +40,25 @@ export default function H2HPanel({ h2h = [], loading = false }) {
   }
 
   const last6 = h2h.slice(0, 6);
-  const chelsea = last6.filter(m => {
-    const isChelseaHome = m.homeTeam === 'Chelsea FC';
-    const cg = isChelseaHome ? m.homeGoals : m.awayGoals;
-    const og = isChelseaHome ? m.awayGoals : m.homeGoals;
-    return cg > og;
+  const myWins = last6.filter(m => {
+    const isMyHome = m.homeTeam === myTeamName;
+    const mg = isMyHome ? m.homeGoals : m.awayGoals;
+    const og = isMyHome ? m.awayGoals : m.homeGoals;
+    return mg > og;
   }).length;
   const drawn = last6.filter(m => m.homeGoals === m.awayGoals).length;
-  const opp   = last6.length - chelsea - drawn;
+  const opp   = last6.length - myWins - drawn;
 
   return (
     <div>
       <div className="card-title" style={{ marginBottom: 4 }}>Head to head</div>
       <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 12 }}>
-        <span className="text-green fw-700">CHE {chelsea}</span>
+        <span className="text-green fw-700">{myTeamShort} {myWins}</span>
         <span className="text-muted">{drawn} D</span>
         <span className="text-red">{opp} OPP</span>
         <span className="text-muted">last {last6.length}</span>
       </div>
-      {last6.map((m, i) => <MatchRow key={i} match={m} />)}
+      {last6.map((m, i) => <MatchRow key={i} match={m} myTeamName={myTeamName} />)}
     </div>
   );
 }

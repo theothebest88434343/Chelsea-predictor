@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { format, parseISO, isValid } from 'date-fns';
 import { useSeasonAccuracy, usePerformanceMetrics, useBettingSim, useTrackerHistory } from '../hooks/useHistory';
 import ClubBadge from '../components/ClubBadge';
+import { ComingSoon } from '../utils/leagues.jsx';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ScatterChart, Scatter, ReferenceLine,
@@ -307,6 +309,7 @@ function TrackerHistory() {
   const gwMap = new Map();
   for (const p of all) {
     const gw = p.gameweek ?? 0;
+    if (!gw || gw === 1) continue; // skip GW0/null and GW1 (made before season started)
     if (!gwMap.has(gw)) { gwMap.set(gw, []); byGW.push(gw); }
     gwMap.get(gw).push(p);
   }
@@ -384,7 +387,10 @@ function TrackerHistory() {
 }
 
 export default function Stats() {
+  const { leagueId } = useParams();
   const [tab, setTab] = useState('accuracy');
+
+  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
 
   return (
     <div>

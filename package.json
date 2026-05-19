@@ -5,9 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "NODE_ENV=production node server.js",
-    "server": "nodemon server.js --ignore prediction-history.json --ignore src/",
+    "server": "lsof -ti :3001 | xargs kill -9 2>/dev/null; PORT=3001 nodemon server.js --ignore prediction-history.json --ignore market-history.json --ignore wc-pre-predictions.json --ignore 'prediction-history-*.json' --ignore src/",
     "client": "vite",
-    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "dev": "concurrently --no-kill-others-on-fail --names server,client \"npm run server\" \"npm run client\"",
     "build": "vite build",
     "preview": "vite preview"
   },

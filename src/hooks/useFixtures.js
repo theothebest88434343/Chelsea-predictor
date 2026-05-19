@@ -1,19 +1,27 @@
 import { useFetch } from './useFetch';
 
-export function useFixtures() {
-  return useFetch('/api/fixtures');
+export function useFixtures(teamCode) {
+  const qs = teamCode ? `?teamCode=${teamCode}` : '';
+  return useFetch(`/api/fixtures${qs}`);
 }
 
-export function useResults() {
-  return useFetch('/api/results');
+export function useResults(teamCode) {
+  const qs = teamCode ? `?teamCode=${teamCode}` : '';
+  return useFetch(`/api/results${qs}`);
 }
 
 export function useStandings() {
   return useFetch('/api/standings');
 }
 
-export function useChelseaStats() {
-  return useFetch('/api/chelsea-stats');
+// Legacy alias kept; prefer useTeamStats(teamCode)
+export function useChelseaStats(teamCode) {
+  return useTeamStats(teamCode);
+}
+
+export function useTeamStats(teamCode) {
+  const qs = teamCode ? `?teamCode=${teamCode}` : '';
+  return useFetch(`/api/team-stats${qs}`);
 }
 
 export function usePredictedTable() {

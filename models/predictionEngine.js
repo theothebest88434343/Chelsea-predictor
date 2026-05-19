@@ -9,6 +9,8 @@ const SIMULATIONS       = 10_000;
 // τ applies only to 0-0, 1-0, 0-1, 1-1 cells — all other scores unaffected.
 const RHO = -0.11;
 const FORM_WEIGHTS      = [0.30, 0.24, 0.20, 0.16, 0.10]; // recency-weighted, smooth tail
+const STREAK_WEIGHTS    = [0.35, 0.25, 0.20, 0.12, 0.08]; // most-recent first — steeper than FORM_WEIGHTS
+const STREAK_CAP        = 0.18;  // ±18% max swing from pure W/D/L streak signal
 const FORM_MOMENTUM_XG    = 0.10;  // hard cap when xG is primary (xG already reflects current pace)
 const FORM_BLEND_NOXG     = 0.25;  // form weight in 25/75 blend when falling back to rolling EWMA
 const FORM_BLEND_NOXG_CAP = 0.30;  // outer cap on the blend result (prevents extreme outliers)
@@ -199,6 +201,31 @@ function buildEloRatings(allFixtures) {
   return elo;
 }
 
+// ─── Form streak multiplier ───────────────────────────────────────────────────
+// Weighted W/D/L score over the last 5 games (most recent = highest weight).
+// recentResults items: { homeGoals: <team's goals scored>, awayGoals: <opp goals> }
+// The naming follows server.js buildFormData convention — homeGoals = team's goals
+// regardless of venue.  Returns a multiplier in [1−STREAK_CAP, 1+STREAK_CAP]
+// applied to λ AFTER the ELO blend so it captures very recent momentum that
+// season-window xG / ELO signals miss.  This is intentionally separate from
+// formMomAtk/formMomDef which use goal-rate ratios; this uses the raw W/D/L
+// sequence which punishes losing streaks more aggressively.
+
+function formStreakMultiplier(recentResults) {
+  if (!recentResults || recentResults.length === 0) return 1.0;
+  const n       = Math.min(recentResults.length, STREAK_WEIGHTS.length);
+  const weights = STREAK_WEIGHTS.slice(0, n);
+  const wSum    = weights.reduce((a, b) => a + b, 0) || 1;
+  let score     = 0;
+  for (let i = 0; i < n; i++) {
+    const { homeGoals, awayGoals } = recentResults[i];
+    const outcome = homeGoals > awayGoals ? 1 : homeGoals === awayGoals ? 0 : -1;
+    score += (STREAK_WEIGHTS[i] / wSum) * outcome;
+  }
+  // score ∈ [−1, +1] → multiplier ∈ [1−STREAK_CAP, 1+STREAK_CAP]
+  return clamp(1 + score * STREAK_CAP, 1 - STREAK_CAP, 1 + STREAK_CAP);
+}
+
 // ─── Lambda calculation ───────────────────────────────────────────────────────
 
 function calculateLambdas({
@@ -368,6 +395,15 @@ function calculateLambdas({
     lH = lH * (1 - eloW) + eloLH * eloW;
     lA = lA * (1 - eloW) + eloLA * eloW;
   }
+
+  // ─── Step 5: Streak multiplier — weighted W/D/L over last 5 games ────────────
+  // Applied after ELO so very-recent form can override the slower quality signals.
+  // Distinct from formMomAtk/formMomDef (which use goal-rate ratios over a season
+  // window); this uses only the win/draw/loss sequence and has a ±18% cap.
+  const hStreakMult = formStreakMultiplier(formData[homeTeam.id]?.recentResults ?? []);
+  const aStreakMult = formStreakMultiplier(formData[awayTeam.id]?.recentResults ?? []);
+  lH *= hStreakMult;
+  lA *= aStreakMult;
 
   // Player availability penalty — each key player missing reduces lambda 5%
   lH *= Math.max(0, 1 - homeInjuries * 0.05);

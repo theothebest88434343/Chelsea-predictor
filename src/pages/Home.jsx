@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { format, isPast } from 'date-fns';
-import { useFixtures, useResults, useChelseaStats } from '../hooks/useFixtures';
+import { useParams } from 'react-router-dom';
+import { useFixtures, useResults, useTeamStats } from '../hooks/useFixtures';
 import { usePrediction } from '../hooks/usePredictions';
+import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { ConfidenceBadge } from '../utils/confidence.jsx';
+import { ComingSoon } from '../utils/leagues.jsx';
 
 function Countdown({ kickoffTime }) {
   const [now, setNow] = useState(Date.now());
@@ -77,14 +80,14 @@ function StatsBar({ stats }) {
   );
 }
 
-function RecentResults({ results }) {
+function RecentResults({ results, teamCode }) {
   if (!results?.length) return null;
   return (
     <div className="card">
       <div className="card-title">Recent results</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {results.map(r => {
-          const isChelseaHome = r.homeTeam.code === 8;
+          const isChelseaHome = r.homeTeam.code === teamCode;
           const chelseaGoals  = isChelseaHome ? r.homeScore : r.awayScore;
           const oppGoals      = isChelseaHome ? r.awayScore : r.homeScore;
           const opp           = isChelseaHome ? r.awayTeam  : r.homeTeam;
@@ -118,15 +121,20 @@ function RecentResults({ results }) {
 }
 
 export default function Home() {
-  const { data: fixtures, loading: fLoading } = useFixtures();
-  const { data: results }                      = useResults();
-  const { data: stats }                        = useChelseaStats();
+  const { leagueId } = useParams();
+  const favTeam = useFavouriteTeam();
 
+  // Hooks must always be called — check leagueId after
+  const { data: fixtures, loading: fLoading } = useFixtures(favTeam.code);
+  const { data: results }                      = useResults(favTeam.code);
+  const { data: stats }                        = useTeamStats(favTeam.code);
   const nextFixture = fixtures?.[0] ?? null;
   const { data: prediction, loading: pLoading } = usePrediction(nextFixture?.id);
 
+  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+
   if (fLoading) {
-    return <div className="loading-card"><div className="spinner" /><div>Loading Chelsea data…</div></div>;
+    return <div className="loading-card"><div className="spinner" /><div>Loading {favTeam.name} data…</div></div>;
   }
 
   return (
@@ -190,7 +198,7 @@ export default function Home() {
 
       <StatsBar stats={stats} />
 
-      <RecentResults results={results} />
+      <RecentResults results={results} teamCode={favTeam.code} />
     </div>
   );
 }

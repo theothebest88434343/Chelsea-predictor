@@ -4,15 +4,17 @@ import { AlertCircle } from 'lucide-react';
 const STATUS_LABEL = { i: 'Injured', d: 'Doubtful', s: 'Suspended' };
 const STATUS_COLOR = { i: 'var(--red)', d: 'var(--draw)', s: 'var(--text-muted)' };
 
-export default function InjuriesPanel() {
-  const { data, loading, error } = useFetch('/api/injuries');
+export default function InjuriesPanel({ teamCode, teamShort }) {
+  const qs = teamCode ? `?teamCode=${teamCode}` : '';
+  const { data, loading, error } = useFetch(`/api/injuries${qs}`);
+  const label = teamShort ? `${teamShort} injuries` : 'Injuries';
 
   if (loading) return <div className="loading-card"><div className="spinner" /><div>Loading injuries…</div></div>;
   if (error)   return null;
   if (!data?.length) {
     return (
       <div className="card">
-        <div className="card-title">Chelsea injuries</div>
+        <div className="card-title">{label}</div>
         <span className="text-muted fs-13">No injuries reported</span>
       </div>
     );
@@ -20,7 +22,7 @@ export default function InjuriesPanel() {
 
   return (
     <div className="card">
-      <div className="card-title">Chelsea injuries</div>
+      <div className="card-title">{label}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {data.map(player => (
           <div key={player.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
@@ -37,7 +39,7 @@ export default function InjuriesPanel() {
               <span className="chip chip-muted" style={{ fontSize: 10 }}>
                 {player.position}
               </span>
-              {player.chancePlay !== null && (
+              {player.chancePlay != null && (
                 <div style={{ fontSize: 11, color: STATUS_COLOR[player.status], marginTop: 4 }}>
                   {player.chancePlay}% chance
                 </div>

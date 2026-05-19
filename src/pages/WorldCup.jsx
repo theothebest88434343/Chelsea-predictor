@@ -52,6 +52,16 @@ function flag(name) {
 }
 
 
+// Format ISO UTC kickoff string → "11 Jun · 19:00 UTC"  (always UTC, never local time)
+function fmtKickoffUTC(iso) {
+  if (!iso) return null;
+  const [datePart, timePart] = iso.split('T');
+  const [, mm, dd] = datePart.split('-');
+  const MONTHS = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const hhmm = timePart.slice(0, 5);
+  return `${parseInt(dd)} ${MONTHS[parseInt(mm)]} · ${hhmm} UTC`;
+}
+
 // One accent colour per group A–L
 const GROUP_COLORS = {
   A: '#3b82f6', // blue
@@ -1667,36 +1677,168 @@ function WinnerOddsView({ data, onTeamClick }) {
 }
 
 // Pre-tournament view — group draw with all match predictions pre-loaded
-function PreTournamentView({ data, onTeamClick }) {
-  const { hardcodedGroups, groupMatchPredictions, groupPredictedStandings } = data;
-  const [tab, setTab]           = useState('groups'); // 'groups' | 'table' | 'insights' | 'odds' | 'accuracy'
-  const [expandedGroup, setExpandedGroup] = useState(null);
-  const [expandedH2H, setExpandedH2H]    = useState(null); // 'A-0', 'B-2', etc.
+// ─── R32 Bracket view ─────────────────────────────────────────────────────────
+function BracketView({ data }) {
+  const { groupPredictedStandings, tournamentReach } = data;
 
-  const tabStyle = (id) => ({
-    flex: 1, padding: '8px 0', borderRadius: 8, fontWeight: 700, fontSize: 12,
-    border:     tab === id ? '1.5px solid var(--gold)' : '1px solid var(--border)',
-    background: tab === id ? 'rgba(255,215,0,0.1)'    : 'var(--surface2)',
-    color:      tab === id ? 'var(--gold)'             : 'var(--text-primary)',
-    cursor:     'pointer',
-  });
+  // Return the predicted (or actual live) team at a given group + rank (1-based)
+  function getTeam(letter, rank) {
+    // Live standings take priority
+    const liveGroup = data.groups?.[letter];
+    if (liveGroup?.length >= rank) {
+      const sorted = [...liveGroup].sort((a, b) =>
+        b.points - a.points || b.gd - a.gd || (b.gf ?? 0) - (a.gf ?? 0)
+      );
+      const t = sorted[rank - 1]?.team;
+      if (t) return t;
+    }
+    // Fall back to pre-tournament predicted standings (already sorted)
+    return groupPredictedStandings?.[letter]?.[rank - 1]?.team ?? null;
+  }
+
+  function pct(v) { return v != null ? `${Math.round(v * 100)}%` : '?'; }
+
+  // Team card: shows flag, name, and R16 probability
+  function TeamSlot({ team, label, color }) {
+    const reach = team ? tournamentReach?.[team] : null;
+    const prob  = reach?.pR16; // probability of advancing past R32 into R16
+    return (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {team ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ fontSize: 18, lineHeight: 1 }}>{flag(team)}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>{team}</span>
+            </div>
+            {prob != null && (
+              <div style={{ fontSize: 9, color: color ?? 'var(--text-muted)' }}>
+                {pct(prob)} advance
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ fontSize: 16 }}>🏳️</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>{label ?? 'TBD'}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // The 16 R32 matchups (structure mirrors simulateTournamentReach)
+  const r32 = [
+    // Matches 1-8: group winners A-H vs best 8 third-place finishers
+    { id:1,  desc:'A1 vs Best 3rd', home: getTeam('A',1), away: null,            awayLabel:'Best 3rd' },
+    { id:2,  desc:'B1 vs Best 3rd', home: getTeam('B',1), away: null,            awayLabel:'Best 3rd' },
+    { id:3,  desc:'C1 vs Best 3rd', home: getTeam('C',1), away: null,            awayLabel:'Best 3rd' },
+    { id:4,  desc:'D1 vs Best 3rd', home: getTeam('D',1), away: null,            awayLabel:'Best 3rd' },
+    { id:5,  desc:'E1 vs Best 3rd', home: getTeam('E',1), away: null,            awayLabel:'Best 3rd' },
+    { id:6,  desc:'F1 vs Best 3rd', home: getTeam('F',1), away: null,            awayLabel:'Best 3rd' },
+    { id:7,  desc:'G1 vs Best 3rd', home: getTeam('G',1), away: null,            awayLabel:'Best 3rd' },
+    { id:8,  desc:'H1 vs Best 3rd', home: getTeam('H',1), away: null,            awayLabel:'Best 3rd' },
+    // Matches 9-12: groups I-L cross-matchups
+    { id:9,  desc:'I1 vs J2',       home: getTeam('I',1), away: getTeam('J',2) },
+    { id:10, desc:'J1 vs I2',       home: getTeam('J',1), away: getTeam('I',2) },
+    { id:11, desc:'K1 vs L2',       home: getTeam('K',1), away: getTeam('L',2) },
+    { id:12, desc:'L1 vs K2',       home: getTeam('L',1), away: getTeam('K',2) },
+    // Matches 13-16: runner-up cross-matchups
+    { id:13, desc:'A2 vs F2',       home: getTeam('A',2), away: getTeam('F',2) },
+    { id:14, desc:'B2 vs E2',       home: getTeam('B',2), away: getTeam('E',2) },
+    { id:15, desc:'C2 vs H2',       home: getTeam('C',2), away: getTeam('H',2) },
+    { id:16, desc:'D2 vs G2',       home: getTeam('D',2), away: getTeam('G',2) },
+  ];
+
+  const sections = [
+    { title: 'Group Winners vs Best 3rd-Place', matches: r32.slice(0, 8) },
+    { title: 'Groups I–L Cross Matchups',       matches: r32.slice(8, 12) },
+    { title: 'Runner-Up Cross Matchups',         matches: r32.slice(12, 16) },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* header note */}
+      <div style={{
+        background: 'rgba(255,215,0,0.07)', border: '1px solid rgba(255,215,0,0.2)',
+        borderRadius: 10, padding: '10px 14px',
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--gold)', marginBottom: 3 }}>🗺️ Round of 32 — Predicted Bracket</div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          16 matchups based on predicted group standings. Best-3rd slots are determined after all groups finish — the 8 highest-ranked 3rd-place teams advance.
+        </div>
+      </div>
+
+      {sections.map(({ title, matches }) => (
+        <div key={title}>
+          <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>
+            {title}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {matches.map(m => {
+              // Determine predicted winner from higher pR16
+              const hProb = m.home ? (tournamentReach?.[m.home]?.pR16 ?? 0) : 0;
+              const aProb = m.away ? (tournamentReach?.[m.away]?.pR16 ?? 0) : 0;
+              const favHome = m.home && m.away && hProb >= aProb;
+              const accent  = favHome ? 'var(--blue)' : m.away ? 'var(--gold)' : 'rgba(255,255,255,0.15)';
+
+              return (
+                <div key={m.id} style={{
+                  background:   'var(--surface2)',
+                  borderRadius: 10,
+                  border:       '1px solid var(--border)',
+                  borderLeft:   `3px solid ${accent}`,
+                  padding:      '10px 12px',
+                }}>
+                  {/* Match label */}
+                  <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.8, marginBottom: 8, textTransform: 'uppercase' }}>
+                    R32 Match {m.id} · {m.desc}
+                  </div>
+                  {/* Teams */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    <TeamSlot team={m.home} color='var(--blue)' />
+                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', paddingTop: 3, flexShrink: 0 }}>vs</div>
+                    <TeamSlot team={m.away} label={m.awayLabel} color='var(--gold)' />
+                  </div>
+                  {/* Probability bar (only when both teams known) */}
+                  {m.home && m.away && (hProb + aProb > 0) && (
+                    <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 9, color: 'var(--blue)', width: 28, textAlign: 'right' }}>{pct(hProb)}</span>
+                      <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden', position: 'relative' }}>
+                        <div style={{
+                          position: 'absolute', left: 0, top: 0, bottom: 0,
+                          width: `${(hProb / (hProb + aProb)) * 100}%`,
+                          background: 'var(--blue)', borderRadius: 2,
+                        }} />
+                      </div>
+                      <span style={{ fontSize: 9, color: 'var(--gold)', width: 28 }}>{pct(aProb)}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// PreTournamentView — just the group cards (tabs live in the outer bar)
+function PreTournamentView({ data, onTeamClick }) {
+  const { hardcodedGroups, groupMatchPredictions, wcSchedule } = data;
+
+  function findSchedule(group, home, away) {
+    return wcSchedule?.find(s =>
+      s.group === group &&
+      ((s.home === home && s.away === away) || (s.home === away && s.away === home))
+    ) ?? null;
+  }
+
+  const [expandedGroup, setExpandedGroup] = useState(null);
+  const [expandedH2H, setExpandedH2H]    = useState(null);
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-        <button style={tabStyle('groups')}   onClick={() => setTab('groups')}>Groups</button>
-        <button style={tabStyle('table')}    onClick={() => setTab('table')}>Table</button>
-        <button style={tabStyle('insights')} onClick={() => setTab('insights')}>Insights</button>
-        <button style={tabStyle('odds')}     onClick={() => setTab('odds')}>🏆 Odds</button>
-      </div>
-
-      {tab === 'table' ? (
-        <PredictedTableView data={data} onTeamClick={onTeamClick} />
-      ) : tab === 'insights' ? (
-        <InsightsView data={data} onTeamClick={onTeamClick} />
-      ) : tab === 'odds' ? (
-        <WinnerOddsView data={data} onTeamClick={onTeamClick} />
-      ) : (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {Object.entries(hardcodedGroups).map(([letter, teams]) => {
         const matches  = groupMatchPredictions?.[letter] ?? [];
@@ -1747,6 +1889,7 @@ function PreTournamentView({ data, onTeamClick }) {
                   const accent  = favours === 'home' ? 'var(--blue)'
                                 : favours === 'away' ? 'var(--gold)'
                                 : 'rgba(255,255,255,0.2)';
+                  const sched   = findSchedule(letter, m.home, m.away);
                   return (
                     <div key={i} style={{
                       background:   'var(--surface2)',
@@ -1755,6 +1898,20 @@ function PreTournamentView({ data, onTeamClick }) {
                       borderLeft:   `3px solid ${accent}`,
                       padding:      '10px 12px',
                     }}>
+                      {/* Schedule header */}
+                      {sched && (
+                        <div style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <span style={{ fontSize: 9, color: color, fontWeight: 700, letterSpacing: 0.5 }}>MD{sched.md}</span>
+                            <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: 0.3 }}>·</span>
+                            <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>📅 {fmtKickoffUTC(sched.kickoff)}</span>
+                          </div>
+                          <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                            📍 {sched.venue}, {sched.city}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Teams row */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                         <span style={{ fontSize: 16, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{flag(m.home)}</span>
@@ -1831,7 +1988,6 @@ function PreTournamentView({ data, onTeamClick }) {
         );
       })}
     </div>
-      )}
     </div>
   );
 }
@@ -1958,39 +2114,54 @@ export default function WorldCup() {
         <PhaseBadge phase={phase} />
       </div>
 
-      {/* Tab switcher — only shown once live data is available */}
-      {hasApiData && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          {[
-            { id: 'groups',   label: 'Groups' },
-            { id: 'knockout', label: 'Knockout', disabled: !isKnockout && !data?.knockoutFixtures?.length },
-            { id: 'accuracy', label: '📊 Accuracy' },
-          ].map(({ id, label, disabled }) => (
-            <button
-              key={id}
-              disabled={disabled}
-              onClick={() => setView(id)}
-              style={{
-                flex:         1,
-                padding:      '8px 0',
-                borderRadius: 8,
-                border:       view === id ? '1.5px solid var(--gold)' : '1px solid var(--border)',
-                background:   view === id ? 'rgba(255,215,0,0.1)' : 'var(--surface2)',
-                color:        view === id ? 'var(--gold)' : disabled ? 'var(--text-muted)' : 'var(--text-primary)',
-                fontWeight:   700,
-                fontSize:     13,
-                cursor:       disabled ? 'not-allowed' : 'pointer',
-                opacity:      disabled ? 0.5 : 1,
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Single tab bar — adapts between pre-tournament and live */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2 }}>
+        {(hasApiData ? [
+          { id: 'groups',   label: 'Groups' },
+          { id: 'bracket',  label: 'Bracket' },
+          { id: 'knockout', label: 'Knockout', disabled: !isKnockout && !data?.knockoutFixtures?.length },
+          { id: 'accuracy', label: '📊 Accuracy' },
+        ] : [
+          { id: 'groups',   label: 'Groups' },
+          { id: 'table',    label: 'Table' },
+          { id: 'bracket',  label: 'Bracket' },
+          { id: 'insights', label: 'Insights' },
+          { id: 'odds',     label: '🏆 Odds' },
+        ]).map(({ id, label, disabled }) => (
+          <button
+            key={id}
+            disabled={disabled}
+            onClick={() => !disabled && setView(id)}
+            style={{
+              flex:         '0 0 auto',
+              minWidth:     64,
+              padding:      '8px 12px',
+              borderRadius: 8,
+              border:       view === id ? '1.5px solid var(--gold)' : '1px solid var(--border)',
+              background:   view === id ? 'rgba(255,215,0,0.1)' : 'var(--surface2)',
+              color:        view === id ? 'var(--gold)' : disabled ? 'var(--text-muted)' : 'var(--text-primary)',
+              fontWeight:   700,
+              fontSize:     11,
+              whiteSpace:   'nowrap',
+              cursor:       disabled ? 'not-allowed' : 'pointer',
+              opacity:      disabled ? 0.45 : 1,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       {/* Content */}
-      {!hasApiData ? (
+      {view === 'bracket' ? (
+        <BracketView data={{ hardcodedGroups: {}, ...data }} />
+      ) : !hasApiData && view === 'table' ? (
+        <PredictedTableView data={{ hardcodedGroups: {}, ...data }} onTeamClick={setSelectedTeam} />
+      ) : !hasApiData && view === 'insights' ? (
+        <InsightsView data={{ hardcodedGroups: {}, ...data }} onTeamClick={setSelectedTeam} />
+      ) : !hasApiData && view === 'odds' ? (
+        <WinnerOddsView data={{ hardcodedGroups: {}, ...data }} onTeamClick={setSelectedTeam} />
+      ) : !hasApiData ? (
         <PreTournamentView data={{ hardcodedGroups: {}, phase: 'PRE_TOURNAMENT', ...data }} onTeamClick={setSelectedTeam} />
       ) : view === 'groups' ? (
         <GroupStageView data={data} />

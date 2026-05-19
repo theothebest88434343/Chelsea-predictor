@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { useGameweekPredictions } from '../hooks/usePredictions';
+import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { format } from 'date-fns';
 import { ConfidenceBadge } from '../utils/confidence.jsx';
 import ClubBadge from '../components/ClubBadge';
-
-const CHELSEA_CODE = 8;
+import { ComingSoon } from '../utils/leagues.jsx';
 
 function formatSeason(s) {
   // "2025-26" → "25/26"
@@ -84,13 +85,13 @@ function GWSelector({ currentGW, selected, onChange }) {
   );
 }
 
-function FixtureRow({ pred }) {
+function FixtureRow({ pred, favTeamCode }) {
   if (!pred) return null;
 
   const { homeTeam, awayTeam, prediction, kickoff } = pred;
   const p = prediction;
-  const isChelseaHome = homeTeam.code === CHELSEA_CODE;
-  const isChelseaAway = awayTeam.code === CHELSEA_CODE;
+  const isChelseaHome = homeTeam.code === favTeamCode;
+  const isChelseaAway = awayTeam.code === favTeamCode;
   const isChelsea     = isChelseaHome || isChelseaAway;
 
   return (
@@ -158,6 +159,8 @@ function FixtureRow({ pred }) {
 }
 
 export default function Round() {
+  const { leagueId } = useParams();
+  const favTeam = useFavouriteTeam();
   const { data: seasonsData } = useFetch('/api/seasons');
   const seasons = seasonsData ?? [];
 
@@ -205,6 +208,8 @@ export default function Round() {
     return <div className="loading-card"><div className="spinner" /><div>Loading…</div></div>;
   }
 
+  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+
   return (
     <div>
       <div className="section-title">
@@ -229,7 +234,7 @@ export default function Round() {
       )}
 
       {!loading && predictions?.map(pred => (
-        <FixtureRow key={pred.fixtureId} pred={pred} />
+        <FixtureRow key={pred.fixtureId} pred={pred} favTeamCode={favTeam.code} />
       ))}
 
       {!loading && predictions?.length > 0 && (

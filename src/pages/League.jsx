@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { useStandings, usePredictedTable } from '../hooks/useFixtures';
 import { useFetch } from '../hooks/useFetch';
+import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import ClubBadge from '../components/ClubBadge';
-
-const CHELSEA_CODE = 8;
+import { ComingSoon } from '../utils/leagues.jsx';
 
 function PositionBadge({ pos }) {
   const color = pos <= 4 ? 'var(--blue-light)' : pos <= 6 ? 'var(--green)' : pos >= 18 ? 'var(--red)' : 'var(--text-muted)';
@@ -151,6 +152,8 @@ function PredTable({ rows, isChelsea }) {
 }
 
 export default function League() {
+  const { leagueId } = useParams();
+  const favTeam = useFavouriteTeam();
   const [view,   setView]   = useState('live');
   const [sortBy, setSortBy] = useState('pts');
 
@@ -159,7 +162,9 @@ export default function League() {
   const { data: xptsData }  = useFetch('/api/xpts');
   const { data: eloData }   = useFetch('/api/elo-ratings');
 
-  const isChelsea = t => t.code === CHELSEA_CODE || t.short === 'CHE';
+  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+
+  const isChelsea = t => t.code === favTeam.code || t.short === favTeam.short;
 
   const xptsMap = {};
   for (const row of xptsData ?? []) xptsMap[row.teamId] = row.xPts;

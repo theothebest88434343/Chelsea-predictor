@@ -13,9 +13,10 @@ function renderMarkdown(text) {
     .join('');
 }
 
-export default function OpponentAnalysis({ teamId }) {
+export default function OpponentAnalysis({ teamId, myTeamCode }) {
   const [open, setOpen] = useState(false);
-  const { data, loading, error } = useFetch(teamId && open ? `/api/opponent-analysis?teamId=${teamId}` : null);
+  const qs = myTeamCode ? `&myTeamCode=${myTeamCode}` : '';
+  const { data, loading, error } = useFetch(teamId && open ? `/api/opponent-analysis?teamId=${teamId}${qs}` : null);
 
   if (!teamId) return null;
 
