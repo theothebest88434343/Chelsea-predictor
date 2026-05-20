@@ -53,7 +53,7 @@ function HeroCard({ match, favTeam, prediction }) {
             fontWeight: isHome ? 700 : 400,
             color: isHome ? 'var(--gold)' : undefined,
           }}>
-            {match.homeTeam.name}
+            {match.homeTeam.shortName ?? match.homeTeam.name}
           </div>
         </div>
 
@@ -85,7 +85,7 @@ function HeroCard({ match, favTeam, prediction }) {
             fontWeight: !isHome ? 700 : 400,
             color: !isHome ? 'var(--gold)' : undefined,
           }}>
-            {match.awayTeam.name}
+            {match.awayTeam.shortName ?? match.awayTeam.name}
           </div>
         </div>
       </div>
@@ -159,7 +159,7 @@ function RecentResults({ results, favTeam }) {
                   <Crest src={opp.crest} alt={opp.shortName} size={20} />
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>
-                      {isFavHome ? 'vs' : '@'} {opp.name}
+                      {isFavHome ? 'vs' : '@'} {opp.shortName ?? opp.name}
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                       {kicks ? format(kicks, 'd MMM') : ''} · MD {m.matchday}
