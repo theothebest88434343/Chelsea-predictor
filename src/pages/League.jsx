@@ -6,6 +6,7 @@ import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import ClubBadge from '../components/ClubBadge';
 import { ComingSoon } from '../utils/leagues.jsx';
 import FdLeague from './FdLeague';
+import { TopScorers, LeagueStats, FormTable } from './FdStats';
 
 function PositionBadge({ pos }) {
   const color = pos <= 4 ? 'var(--blue-light)' : pos <= 6 ? 'var(--green)' : pos >= 18 ? 'var(--red)' : 'var(--text-muted)';
@@ -158,6 +159,7 @@ export default function League() {
   const [view,   setView]   = useState('live');
   const [sortBy, setSortBy] = useState('pts');
 
+
   const { data: standings, loading: sLoading, error: sError } = useStandings();
   const { data: predicted, loading: pLoading, error: pError } = usePredictedTable();
   const { data: xptsData }  = useFetch('/api/xpts');
@@ -180,8 +182,11 @@ export default function League() {
       <div className="section-title">Premier League</div>
 
       <div className="tab-row">
-        <button className={`tab-btn${view === 'live'      ? ' active' : ''}`} onClick={() => setView('live')}>Live table</button>
+        <button className={`tab-btn${view === 'live'      ? ' active' : ''}`} onClick={() => setView('live')}>Table</button>
         <button className={`tab-btn${view === 'predicted' ? ' active' : ''}`} onClick={() => setView('predicted')}>Predicted</button>
+        <button className={`tab-btn${view === 'scorers'   ? ' active' : ''}`} onClick={() => setView('scorers')}>Scorers</button>
+        <button className={`tab-btn${view === 'stats'     ? ' active' : ''}`} onClick={() => setView('stats')}>Stats</button>
+        <button className={`tab-btn${view === 'form'      ? ' active' : ''}`} onClick={() => setView('form')}>Form</button>
       </div>
 
       {loading && <div className="loading-card"><div className="spinner" /><div>Loading table…</div></div>}
@@ -214,6 +219,10 @@ export default function League() {
           <PredTable rows={predicted} isChelsea={isChelsea} />
         </div>
       )}
+
+      {view === 'scorers' && <TopScorers  leagueId="premier-league" />}
+      {view === 'stats'   && <LeagueStats leagueId="premier-league" />}
+      {view === 'form'    && <FormTable   leagueId="premier-league" />}
     </div>
   );
 }

@@ -2005,9 +2005,37 @@ app.get('/api/tracker/history', async (req, res) => {
         : p.league === league
     );
 
-    // Only PL has FPL bootstrap for current GW
+    // For FD leagues, compute current matchday by finding the matchday whose
+    // median kickoff date is closest to today. This handles postponed fixtures
+    // (e.g. a rescheduled week 4 game appearing in the future) correctly —
+    // the bulk of week 17 games will be closer to today than any stray outliers.
     if (!isPL) {
-      return res.json({ predictions: filtered.slice().reverse(), currentGW: null });
+      let currentGW = null;
+      const code = FD_CODE[league];
+      if (code) {
+        try {
+          const allMatches = await getFdMatches(code);
+          const now = Date.now();
+
+          // Group matches by matchday, collect median kickoff timestamp per MD
+          const mdMap = new Map();
+          for (const m of allMatches) {
+            if (!m.matchday || !m.kickoffTime) continue;
+            if (!mdMap.has(m.matchday)) mdMap.set(m.matchday, []);
+            mdMap.get(m.matchday).push(new Date(m.kickoffTime).getTime());
+          }
+
+          // For each matchday compute the median kickoff date
+          let closest = Infinity;
+          for (const [md, times] of mdMap) {
+            times.sort((a, b) => a - b);
+            const median = times[Math.floor(times.length / 2)];
+            const dist   = Math.abs(median - now);
+            if (dist < closest) { closest = dist; currentGW = md; }
+          }
+        } catch { /* leave null */ }
+      }
+      return res.json({ predictions: filtered.slice().reverse(), currentGW });
     }
 
     const bootstrap = await fetchBootstrap();
@@ -3648,10 +3676,14 @@ const FD_KEY  = process.env.FOOTBALL_DATA_API_KEY;
 
 // Internal leagueId → football-data.org competition code
 const FD_CODE = {
-  'la-liga':    'PD',
-  'bundesliga': 'BL1',
-  'ligue-1':    'FL1',
-  'serie-a':    'SA',
+  'premier-league': 'PL',
+  'la-liga':        'PD',
+  'bundesliga':     'BL1',
+  'ligue-1':        'FL1',
+  'serie-a':        'SA',
+  'brasileirao':    'BSA',
+  'eredivisie':     'DED',
+  'primeira-liga':  'PPL',
 };
 
 async function fdFetch(path) {
@@ -3750,6 +3782,114 @@ app.get('/api/fd/standings', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('[FD standings]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/fd/predicted-table?league=la-liga
+// Simulates the remaining season using expected points from the model and
+// adds them to the current standings to produce a projected final table.
+app.get('/api/fd/predicted-table', async (req, res) => {
+  const leagueId = req.query.league;
+  const code     = FD_CODE[leagueId];
+  if (!code) return res.status(400).json({ error: `Unknown league: ${leagueId}` });
+
+  const cacheKey = `fd_pred_table_${code}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const [allMatches, standingsRaw, xgRaw] = await Promise.all([
+      getFdMatches(code),
+      fdFetch(`/competitions/${code}/standings`),
+      fetchUnderstatXGForLeague(leagueId),
+    ]);
+
+    const table = standingsRaw.standings?.find(s => s.type === 'TOTAL')?.table ?? [];
+
+    // Build team map from current standings
+    const teamMap = new Map();
+    for (const r of table) {
+      teamMap.set(r.team.id, {
+        teamId:       r.team.id,
+        name:         r.team.name,
+        shortName:    r.team.shortName ?? r.team.tla ?? r.team.name,
+        crest:        r.team.crest,
+        currentPos:   r.position,
+        played:       r.playedGames,
+        won:          r.won,
+        drawn:        r.draw,
+        lost:         r.lost,
+        goalsFor:     r.goalsFor,
+        goalsAgainst: r.goalsAgainst,
+        gd:           r.goalDifference,
+        points:       r.points,
+        xPts:         0,   // expected points from remaining fixtures
+        gamesLeft:    0,
+      });
+    }
+
+    // Build prediction engine inputs (same as /api/fd/predictions)
+    const leagueAvg      = calcFdLeagueAverages(allMatches);
+    const fplShape       = fdMatchesToFplShape(allMatches);
+    const formData       = buildFdFormData(allMatches);
+    const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
+    const eloRatings     = buildEloRatings(fplShape);
+
+    const nameMap = FD_TO_UNDERSTAT_NAME[leagueId] ?? {};
+    const xGData  = {};
+    for (const m of allMatches) {
+      for (const side of ['homeTeam', 'awayTeam']) {
+        const team = m[side];
+        if (xGData[team.id]) continue;
+        const usTitle = nameMap[team.name] ?? team.name;
+        if (xgRaw[usTitle]) xGData[team.id] = xgRaw[usTitle];
+      }
+    }
+
+    // For each unfinished fixture, add expected points to both teams
+    const remaining = allMatches.filter(m => !m.finished);
+    for (const match of remaining) {
+      const pred = predict({
+        homeTeam:      { id: match.homeTeam.id, name: match.homeTeam.name },
+        awayTeam:      { id: match.awayTeam.id, name: match.awayTeam.name },
+        leagueAvgHome: leagueAvg.home,
+        leagueAvgAway: leagueAvg.away,
+        xGData,
+        formData,
+        h2hData:       [],
+        marketOdds:    null,
+        homeInjuries:  0,
+        awayInjuries:  0,
+        rollingRatings,
+        eloRatings,
+      });
+
+      const homeXP = pred.homeWin * 3 + pred.draw;
+      const awayXP = pred.awayWin * 3 + pred.draw;
+
+      if (teamMap.has(match.homeTeam.id)) {
+        const t = teamMap.get(match.homeTeam.id);
+        t.xPts      += homeXP;
+        t.gamesLeft += 1;
+      }
+      if (teamMap.has(match.awayTeam.id)) {
+        const t = teamMap.get(match.awayTeam.id);
+        t.xPts      += awayXP;
+        t.gamesLeft += 1;
+      }
+    }
+
+    // Build projected table sorted by projectedPoints then GD
+    const projected = [...teamMap.values()]
+      .map(t => ({ ...t, projectedPoints: t.points + t.xPts }))
+      .sort((a, b) => b.projectedPoints - a.projectedPoints || b.gd - a.gd)
+      .map((t, i) => ({ ...t, projectedPosition: i + 1 }));
+
+    setCache(cacheKey, projected, 1800); // 30 min cache
+    res.json(projected);
+  } catch (err) {
+    console.error('[FD predicted table]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
