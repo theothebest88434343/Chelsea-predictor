@@ -1,12 +1,12 @@
-import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useState, useEffect, useMemo } from 'react';
+import { useParams, Navigate } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { useGameweekPredictions } from '../hooks/usePredictions';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { ConfidenceBadge } from '../utils/confidence.jsx';
 import ClubBadge from '../components/ClubBadge';
-import { ComingSoon } from '../utils/leagues.jsx';
+import { ComingSoon, getLeague } from '../utils/leagues.jsx';
 
 function formatSeason(s) {
   // "2025-26" → "25/26"
@@ -158,6 +158,151 @@ function FixtureRow({ pred, favTeamCode }) {
   );
 }
 
+// ─── FdRound — matchday browser for non-PL leagues ───────────────────────────
+
+function FdMatchCard({ match }) {
+  const kicks = match.kickoffTime ? parseISO(match.kickoffTime) : null;
+  const winSide = match.finished
+    ? match.homeGoals > match.awayGoals ? 'home'
+    : match.awayGoals > match.homeGoals ? 'away'
+    : 'draw'
+    : null;
+
+  return (
+    <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
+      {kicks && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6, fontWeight: 600 }}>
+          {format(kicks, 'EEE d MMM · HH:mm')}
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        {/* Home */}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {match.homeTeam.crest && (
+            <img src={match.homeTeam.crest} alt={match.homeTeam.shortName}
+              style={{ width: 20, height: 20, objectFit: 'contain', flexShrink: 0 }} />
+          )}
+          <span style={{
+            fontWeight: winSide === 'home' ? 700 : 500,
+            color: winSide === 'home' ? 'var(--gold)' : 'var(--text)',
+            fontSize: 14,
+          }}>
+            {match.homeTeam.shortName ?? match.homeTeam.name}
+          </span>
+        </div>
+
+        {/* Score / VS */}
+        <div style={{ textAlign: 'center', minWidth: 64, flexShrink: 0 }}>
+          {match.finished ? (
+            <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 2, color: 'var(--text)', lineHeight: 1 }}>
+              {match.homeGoals} – {match.awayGoals}
+            </div>
+          ) : (
+            <div style={{ color: 'var(--text-muted)', fontFamily: 'Bebas Neue, sans-serif', fontSize: 18 }}>vs</div>
+          )}
+        </div>
+
+        {/* Away */}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+          <span style={{
+            fontWeight: winSide === 'away' ? 700 : 500,
+            color: winSide === 'away' ? 'var(--gold)' : 'var(--text)',
+            fontSize: 14, textAlign: 'right',
+          }}>
+            {match.awayTeam.shortName ?? match.awayTeam.name}
+          </span>
+          {match.awayTeam.crest && (
+            <img src={match.awayTeam.crest} alt={match.awayTeam.shortName}
+              style={{ width: 20, height: 20, objectFit: 'contain', flexShrink: 0 }} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FdRound({ leagueId }) {
+  const league = getLeague(leagueId);
+  const { data: allMatches, loading, error } = useFetch(`/api/fd/matches?league=${leagueId}`);
+  const [selectedMD, setSelectedMD] = useState(null);
+
+  // Collect all matchdays and find the best default (latest with ≥1 result, or next scheduled)
+  const matchdays = useMemo(() => {
+    if (!allMatches) return [];
+    const mds = [...new Set(allMatches.map(m => m.matchday))].sort((a, b) => a - b);
+    return mds;
+  }, [allMatches]);
+
+  const defaultMD = useMemo(() => {
+    if (!allMatches || !matchdays.length) return null;
+    // Most recent matchday with at least one finished match
+    const finished = allMatches.filter(m => m.finished);
+    if (finished.length) {
+      return Math.max(...finished.map(m => m.matchday));
+    }
+    return matchdays[0];
+  }, [allMatches, matchdays]);
+
+  const activeMD = selectedMD ?? defaultMD;
+
+  const mdMatches = useMemo(() => {
+    if (!allMatches || activeMD == null) return [];
+    return allMatches.filter(m => m.matchday === activeMD);
+  }, [allMatches, activeMD]);
+
+  if (loading) return <div className="loading-card"><div className="spinner" /><div>Loading {league.name} matches…</div></div>;
+  if (error)   return <div className="error-card">Failed to load: {error}</div>;
+
+  return (
+    <div>
+      <div className="section-title">
+        {league.name} · MD {activeMD ?? '…'}
+      </div>
+
+      {/* Matchday selector */}
+      <div style={{ position: 'relative', marginBottom: 16 }}>
+        <select
+          value={activeMD ?? ''}
+          onChange={e => setSelectedMD(Number(e.target.value))}
+          style={{
+            width: '100%', padding: '10px 36px 10px 14px',
+            borderRadius: 8, border: '1px solid var(--border)',
+            background: 'var(--surface)', color: 'var(--text)',
+            fontSize: 14, fontWeight: 600, fontFamily: 'inherit',
+            cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none',
+          }}
+        >
+          {matchdays.map(md => {
+            const mdMatches = allMatches.filter(m => m.matchday === md);
+            const done = mdMatches.filter(m => m.finished).length;
+            return (
+              <option key={md} value={md}>
+                Matchday {md}{md === defaultMD ? '  ·  Current' : ''} — {done}/{mdMatches.length} played
+              </option>
+            );
+          })}
+        </select>
+        <svg width="12" height="12" viewBox="0 0 12 12"
+          style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', opacity: 0.5 }}>
+          <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </div>
+
+      {mdMatches.length === 0 && (
+        <div className="loading-card">No matches found for matchday {activeMD}.</div>
+      )}
+
+      {mdMatches.map(m => <FdMatchCard key={m.id} match={m} />)}
+
+      <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+        {mdMatches.length} fixtures · Data via football-data.org
+      </div>
+    </div>
+  );
+}
+
+// ─── PL Round ─────────────────────────────────────────────────────────────────
+
 export default function Round() {
   const { leagueId } = useParams();
   const favTeam = useFavouriteTeam();
@@ -208,7 +353,7 @@ export default function Round() {
     return <div className="loading-card"><div className="spinner" /><div>Loading…</div></div>;
   }
 
-  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+  if (leagueId !== 'premier-league') return <FdRound leagueId={leagueId} />;
 
   return (
     <div>

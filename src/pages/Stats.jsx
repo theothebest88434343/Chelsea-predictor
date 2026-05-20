@@ -3,14 +3,15 @@ import { useParams } from 'react-router-dom';
 import { format, parseISO, isValid } from 'date-fns';
 import { useSeasonAccuracy, usePerformanceMetrics, useBettingSim, useTrackerHistory } from '../hooks/useHistory';
 import ClubBadge from '../components/ClubBadge';
-import { ComingSoon } from '../utils/leagues.jsx';
+import { getLeague } from '../utils/leagues.jsx';
+import { TopScorers, LeagueStats, FormTable } from './FdStats';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ScatterChart, Scatter, ReferenceLine,
 } from 'recharts';
 
-function AccuracyCard() {
-  const { data, loading } = useSeasonAccuracy();
+function AccuracyCard({ leagueId }) {
+  const { data, loading } = useSeasonAccuracy(leagueId);
   if (loading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
   if (!data || data.total === 0) return (
     <div className="card">
@@ -47,11 +48,23 @@ function AccuracyCard() {
 
       {byGW?.length > 0 && (
         <>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>Accuracy by gameweek</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>
+            {leagueId === 'premier-league' ? 'Accuracy by gameweek' : 'Accuracy by matchday'}
+          </div>
           <ResponsiveContainer width="100%" height={120}>
             <BarChart data={byGW} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="gw" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+              <XAxis
+                dataKey="gw"
+                tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                label={{
+                  value: leagueId === 'premier-league' ? 'GW' : 'MD',
+                  position: 'insideBottomRight',
+                  offset: -4,
+                  fontSize: 9,
+                  fill: 'var(--text-muted)',
+                }}
+              />
               <YAxis domain={[0,1]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={v => `${(v*100).toFixed(0)}%`} />
               <Tooltip formatter={v => `${(v*100).toFixed(0)}%`} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 12 }} />
               <Bar dataKey="accuracy" fill="var(--blue)" radius={[3,3,0,0]} />
@@ -72,8 +85,8 @@ function AccuracyCard() {
   );
 }
 
-function CalibrationCard() {
-  const { data } = usePerformanceMetrics();
+function CalibrationCard({ leagueId }) {
+  const { data } = usePerformanceMetrics(leagueId);
   if (!data?.calibration?.length) return null;
 
   const calibData = data.calibration.map(b => ({
@@ -102,9 +115,9 @@ function CalibrationCard() {
   );
 }
 
-function BettingSimCard() {
+function BettingSimCard({ leagueId }) {
   const [stake, setStake] = useState(10);
-  const { data, loading } = useBettingSim(stake);
+  const { data, loading } = useBettingSim(stake, leagueId);
 
   if (loading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
   if (!data || (!data.flatSeries?.length && !data.kellySeries?.length)) {
@@ -212,6 +225,21 @@ const STATUS_ACCENT = {
   pending: 'rgba(255,255,255,0.12)',
 };
 
+// Renders a crest img for non-PL teams (which have a crest URL), falls back to
+// ClubBadge SVG for PL teams (which have a FPL team code).
+function TeamBadge({ team, size }) {
+  if (team?.crest) {
+    return (
+      <img
+        src={team.crest}
+        alt={team.shortName ?? team.short ?? ''}
+        style={{ width: size, height: size, objectFit: 'contain', flexShrink: 0 }}
+      />
+    );
+  }
+  return <ClubBadge code={team?.code} short={team?.shortName ?? team?.short} size={size} />;
+}
+
 function PredictionRow({ p }) {
   const status = classifyPrediction(p);
   const { label, color, bg, border } = STATUS_META[status];
@@ -231,7 +259,7 @@ function PredictionRow({ p }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
-          <ClubBadge code={p.homeTeam?.code} short={p.homeTeam?.shortName ?? p.homeTeam?.short} size={18} />
+          <TeamBadge team={p.homeTeam} size={18} />
           <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {p.homeTeam?.name ?? p.homeTeam?.short ?? '?'}
           </span>
@@ -241,7 +269,7 @@ function PredictionRow({ p }) {
           <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'right' }}>
             {p.awayTeam?.name ?? p.awayTeam?.short ?? '?'}
           </span>
-          <ClubBadge code={p.awayTeam?.code} short={p.awayTeam?.shortName ?? p.awayTeam?.short} size={18} />
+          <TeamBadge team={p.awayTeam} size={18} />
         </div>
       </div>
 
@@ -288,9 +316,11 @@ function PredictionRow({ p }) {
   );
 }
 
-function TrackerHistory() {
-  const { data, loading } = useTrackerHistory();
+function TrackerHistory({ leagueId }) {
+  const { data, loading } = useTrackerHistory(leagueId);
   const [selectedGW, setSelectedGW] = useState(null);
+  const isPL = leagueId === 'premier-league';
+  const gwLabel = isPL ? 'Gameweek' : 'Matchday';
 
   if (loading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
 
@@ -309,7 +339,8 @@ function TrackerHistory() {
   const gwMap = new Map();
   for (const p of all) {
     const gw = p.gameweek ?? 0;
-    if (!gw || gw === 1) continue; // skip GW0/null and GW1 (made before season started)
+    // Skip GW0/null; for PL also skip GW1 (pre-season anomaly)
+    if (!gw || (isPL && gw === 1)) continue;
     if (!gwMap.has(gw)) { gwMap.set(gw, []); byGW.push(gw); }
     gwMap.get(gw).push(p);
   }
@@ -373,7 +404,7 @@ function TrackerHistory() {
           const settled = gwRows.filter(p => p.result).length;
           return (
             <option key={gw} value={gw}>
-              {gw === 0 ? 'Unknown GW' : `Gameweek ${gw}`} — {settled}/{gwRows.length} settled
+              {gw === 0 ? `Unknown ${gwLabel}` : `${gwLabel} ${gw}`} — {settled}/{gwRows.length} settled
             </option>
           );
         })}
@@ -388,34 +419,52 @@ function TrackerHistory() {
 
 export default function Stats() {
   const { leagueId } = useParams();
-  const [tab, setTab] = useState('accuracy');
+  const isPL  = leagueId === 'premier-league';
+  const league = getLeague(leagueId);
 
-  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+  const [tab, setTab] = useState(isPL ? 'accuracy' : 'scorers');
 
   return (
     <div>
-      <div className="section-title">Analytics</div>
+      <div className="section-title">{isPL ? 'Analytics' : `${league.name} stats`}</div>
 
       <div className="tab-row">
+        {/* Non-PL league tabs */}
+        {!isPL && (
+          <>
+            <button className={`tab-btn${tab === 'scorers' ? ' active' : ''}`} onClick={() => setTab('scorers')}>
+              Scorers
+            </button>
+            <button className={`tab-btn${tab === 'league' ? ' active' : ''}`} onClick={() => setTab('league')}>
+              League
+            </button>
+            <button className={`tab-btn${tab === 'form' ? ' active' : ''}`} onClick={() => setTab('form')}>
+              Form
+            </button>
+          </>
+        )}
+        {/* Analytics tabs — all leagues */}
         <button className={`tab-btn${tab === 'accuracy' ? ' active' : ''}`} onClick={() => setTab('accuracy')}>
           Accuracy
-        </button>
-        <button className={`tab-btn${tab === 'betting' ? ' active' : ''}`} onClick={() => setTab('betting')}>
-          Betting
         </button>
         <button className={`tab-btn${tab === 'tracker' ? ' active' : ''}`} onClick={() => setTab('tracker')}>
           History
         </button>
       </div>
 
+      {/* Non-PL league content tabs */}
+      {!isPL && tab === 'scorers' && <TopScorers leagueId={leagueId} />}
+      {!isPL && tab === 'league'  && <LeagueStats leagueId={leagueId} />}
+      {!isPL && tab === 'form'    && <FormTable   leagueId={leagueId} />}
+
+      {/* Analytics tabs — shared by all leagues */}
       {tab === 'accuracy' && (
         <>
-          <AccuracyCard />
-          <CalibrationCard />
+          <AccuracyCard    leagueId={leagueId} />
+          <CalibrationCard leagueId={leagueId} />
         </>
       )}
-      {tab === 'betting' && <BettingSimCard />}
-      {tab === 'tracker' && <TrackerHistory />}
+      {tab === 'tracker' && <TrackerHistory leagueId={leagueId} />}
     </div>
   );
 }

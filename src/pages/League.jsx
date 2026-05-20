@@ -5,6 +5,7 @@ import { useFetch } from '../hooks/useFetch';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import ClubBadge from '../components/ClubBadge';
 import { ComingSoon } from '../utils/leagues.jsx';
+import FdLeague from './FdLeague';
 
 function PositionBadge({ pos }) {
   const color = pos <= 4 ? 'var(--blue-light)' : pos <= 6 ? 'var(--green)' : pos >= 18 ? 'var(--red)' : 'var(--text-muted)';
@@ -162,7 +163,7 @@ export default function League() {
   const { data: xptsData }  = useFetch('/api/xpts');
   const { data: eloData }   = useFetch('/api/elo-ratings');
 
-  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+  if (leagueId !== 'premier-league') return <FdLeague />;
 
   const isChelsea = t => t.code === favTeam.code || t.short === favTeam.short;
 

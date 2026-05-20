@@ -36,6 +36,15 @@ const {
   FORM_WEIGHTS,
 } = require('./models/predictionEngine');
 
+// ─── Supabase ─────────────────────────────────────────────────────────────────
+// Primary persistence layer. Falls back to local JSON files when env vars are
+// missing (local dev without a Supabase project).
+
+const { createClient } = require('@supabase/supabase-js');
+const supabase = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
+  : null;
+
 // ─── App setup ────────────────────────────────────────────────────────────────
 
 const app  = express();
@@ -71,7 +80,7 @@ const subscriptions = [];
 
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_SECRET_KEY) {
   webPush.setVapidDetails(
-    'mailto:admin@chelseapred.local',
+    'mailto:admin@matchiq.app',
     process.env.VAPID_PUBLIC_KEY,
     process.env.VAPID_SECRET_KEY,
   );
@@ -135,17 +144,33 @@ const TTL = {
 
 const HISTORY_FILE = path.join(__dirname, 'prediction-history.json');
 
-function loadHistory() {
+async function loadHistory() {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('prediction_history')
+        .select('data')
+        .eq('season', getCurrentSeason())
+        .maybeSingle();
+      if (!error && data) return data.data;
+    } catch (err) { console.warn('[Supabase loadHistory]', err.message); }
+  }
+  // File fallback (local dev)
   try {
-    if (fs.existsSync(HISTORY_FILE)) {
-      const raw = fs.readFileSync(HISTORY_FILE, 'utf-8');
-      return JSON.parse(raw);
-    }
+    if (fs.existsSync(HISTORY_FILE)) return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
   } catch {}
   return { season: getCurrentSeason(), predictions: [] };
 }
 
 function saveHistory(data) {
+  if (supabase) {
+    supabase
+      .from('prediction_history')
+      .upsert({ season: data.season, data, updated_at: new Date().toISOString() }, { onConflict: 'season' })
+      .then(({ error }) => { if (error) console.warn('[Supabase saveHistory]', error.message); });
+    return;
+  }
+  // File fallback (local dev)
   fs.writeFileSync(HISTORY_FILE, JSON.stringify(data, null, 2));
 }
 
@@ -155,26 +180,56 @@ function getCurrentSeason() {
   return `${year}-${String(year + 1).slice(2)}`;
 }
 
-let history = loadHistory();
+// Initialised with a safe default; overwritten in app.listen once Supabase resolves
+let history = { season: getCurrentSeason(), predictions: [] };
 
 // ─── Market movement history ──────────────────────────────────────────────────
 
 const MARKET_HISTORY_FILE = path.join(__dirname, 'market-history.json');
 
-function loadMarketHistory() {
+async function loadMarketHistory() {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('market_history').select('fixture_id, snapshots');
+      if (!error && data) {
+        const mh = {};
+        for (const row of data) mh[row.fixture_id] = row.snapshots;
+        return mh;
+      }
+    } catch (err) { console.warn('[Supabase loadMarketHistory]', err.message); }
+  }
   try {
     if (fs.existsSync(MARKET_HISTORY_FILE)) return JSON.parse(fs.readFileSync(MARKET_HISTORY_FILE, 'utf-8'));
   } catch {}
   return {};
 }
 
-function saveMarketSnapshot(fixtureId, odds) {
-  const mh  = loadMarketHistory();
+async function saveMarketSnapshot(fixtureId, odds) {
   const key = String(fixtureId);
-  if (!mh[key]) mh[key] = [];
-  mh[key].push({ timestamp: new Date().toISOString(), home: odds.home, draw: odds.draw, away: odds.away });
-  if (mh[key].length > 10) mh[key] = mh[key].slice(-10); // keep last 10
-  try { fs.writeFileSync(MARKET_HISTORY_FILE, JSON.stringify(mh, null, 2)); } catch {}
+  const snapshot = { timestamp: new Date().toISOString(), home: odds.home, draw: odds.draw, away: odds.away };
+
+  if (supabase) {
+    try {
+      // Load just this fixture's snapshots
+      const { data } = await supabase.from('market_history').select('snapshots').eq('fixture_id', key).maybeSingle();
+      let snapshots = data?.snapshots ?? [];
+      snapshots.push(snapshot);
+      if (snapshots.length > 10) snapshots = snapshots.slice(-10);
+      supabase
+        .from('market_history')
+        .upsert({ fixture_id: key, snapshots, updated_at: new Date().toISOString() }, { onConflict: 'fixture_id' })
+        .then(({ error }) => { if (error) console.warn('[Supabase saveMarketSnapshot]', error.message); });
+    } catch (err) { console.warn('[Supabase saveMarketSnapshot]', err.message); }
+    return;
+  }
+  // File fallback (local dev)
+  try {
+    const mh = fs.existsSync(MARKET_HISTORY_FILE) ? JSON.parse(fs.readFileSync(MARKET_HISTORY_FILE, 'utf-8')) : {};
+    if (!mh[key]) mh[key] = [];
+    mh[key].push(snapshot);
+    if (mh[key].length > 10) mh[key] = mh[key].slice(-10);
+    fs.writeFileSync(MARKET_HISTORY_FILE, JSON.stringify(mh, null, 2));
+  } catch {}
 }
 
 // ─── FPL helpers ──────────────────────────────────────────────────────────────
@@ -1027,7 +1082,7 @@ app.get('/api/live-odds/:fixtureId', async (req, res) => {
     }
 
       if (odds?.home && odds?.draw && odds?.away) {
-      saveMarketSnapshot(fix.id, odds);
+      saveMarketSnapshot(fix.id, odds); // fire-and-forget async
     }
 
     res.json({ fixtureId: fix.id, odds, edge });
@@ -1129,6 +1184,7 @@ async function buildPrediction(fix, bs, allFixtures) {
 
     history.predictions.push({
       fixtureId:  fix.id,
+      league:     'premier-league',
       gameweek:   fix.event,
       kickoff:    fix.kickoff_time,
       homeTeam:   homeTeamObj,
@@ -1317,7 +1373,7 @@ app.get('/api/prematch-report', async (req, res) => {
       const homeRoster = cupSquadRoster(homeTeamData, elements);
       const awayRoster = cupSquadRoster(awayTeamData, elements);
 
-      const systemPrompt = `You are an elite football analyst specialising in Chelsea FC. Write sharp, engaging pre-match analysis for cup finals — the quality of The Athletic.
+      const systemPrompt = `You are an elite football analyst. Write sharp, engaging pre-match analysis for cup finals — the quality of The Athletic.
 Use **bold** for player names and key stats. 3 paragraphs: form & stakes → key tactical battle → ones to watch & what each side needs. Under 420 words.
 ABSOLUTE RULES: (1) ONLY name players from the roster lists provided — never guess at squad members. (2) No score predictions or percentages. (3) No filler phrases. Be specific.`;
 
@@ -1394,7 +1450,7 @@ Write the report now. No headline needed.`;
     const homeSquad = squadSummary(fix.team_h, homeTeam.name);
     const awaySquad = squadSummary(fix.team_a, awayTeam.name);
 
-    const systemPrompt = `You are an elite Premier League tactical analyst specialising in Chelsea FC.
+    const systemPrompt = `You are an elite Premier League tactical analyst specialising in ${homeTeam.name} vs ${awayTeam.name}.
 Write sharp, insightful, punchy pre-match reports — the kind you'd find on The Athletic.
 Use **bold** for player names and key stats. Structure: 3 focused paragraphs (form & context → key tactical battle → ones to watch & verdict). Under 380 words.
 
@@ -1629,12 +1685,17 @@ app.get('/api/predicted-table', async (req, res) => {
 
 app.get('/api/season-accuracy', async (req, res) => {
   try {
-    const cached = getCache('season_accuracy');
+    const league   = req.query.league || 'premier-league';
+    const isPL     = league === 'premier-league';
+    const cacheKey = `season_accuracy_${league}`;
+    const cached   = getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const completed = history.predictions.filter(p =>
-      p.result && p.prediction && p.gameweek && p.gameweek > 1
-    );
+    const completed = history.predictions.filter(p => {
+      if (!p.result || !p.prediction || !p.gameweek) return false;
+      if (isPL) return (p.gameweek > 1) && (!p.league || p.league === 'premier-league');
+      return p.league === league;
+    });
     const total = completed.length;
     if (total === 0) return res.json({ total: 0, correct: 0, accuracy: 0, byGW: [] });
 
@@ -1675,7 +1736,7 @@ app.get('/api/season-accuracy', async (req, res) => {
         .sort((a, b) => a.gw - b.gw),
     };
 
-    setCache('season_accuracy', result, TTL.ACCURACY);
+    setCache(cacheKey, result, TTL.ACCURACY);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1686,9 +1747,13 @@ app.get('/api/season-accuracy', async (req, res) => {
 
 app.get('/api/performance-metrics', async (req, res) => {
   try {
-    const completed = history.predictions.filter(p =>
-      p.result && p.prediction && p.gameweek && p.gameweek > 1
-    );
+    const league = req.query.league || 'premier-league';
+    const isPL   = league === 'premier-league';
+    const completed = history.predictions.filter(p => {
+      if (!p.result || !p.prediction || !p.gameweek) return false;
+      if (isPL) return (p.gameweek > 1) && (!p.league || p.league === 'premier-league');
+      return p.league === league;
+    });
     if (completed.length === 0) return res.json({ message: 'No completed predictions yet' });
 
     const predictions = completed.map(p => ({
@@ -1713,7 +1778,13 @@ app.get('/api/performance-metrics', async (req, res) => {
 app.get('/api/betting-sim', async (req, res) => {
   try {
     const stake  = Number(req.query.stake) || 10;
-    const valid  = history.predictions.filter(p => p.gameweek && p.gameweek > 1);
+    const league = req.query.league || 'premier-league';
+    const isPL   = league === 'premier-league';
+    const valid  = history.predictions.filter(p => {
+      if (!p.gameweek) return false;
+      if (isPL) return (p.gameweek > 1) && (!p.league || p.league === 'premier-league');
+      return p.league === league;
+    });
     const result = bettingSimulator(valid, stake);
     res.json(result);
   } catch (err) {
@@ -1743,13 +1814,33 @@ app.post('/api/tracker/result', async (req, res) => {
 
 app.get('/api/tracker/history', async (req, res) => {
   try {
+    const league = req.query.league || 'premier-league';
+    const isPL   = league === 'premier-league';
+
+    const filtered = history.predictions.filter(p =>
+      isPL
+        ? (!p.league || p.league === 'premier-league')
+        : p.league === league
+    );
+
+    // Only PL has FPL bootstrap for current GW
+    if (!isPL) {
+      return res.json({ predictions: filtered.slice().reverse(), currentGW: null });
+    }
+
     const bootstrap = await fetchBootstrap();
     const currentGW = bootstrap?.events?.find(e => e.is_current)?.id
       ?? bootstrap?.events?.find(e => e.is_next)?.id
       ?? null;
-    res.json({ predictions: history.predictions.slice().reverse(), currentGW });
+    res.json({ predictions: filtered.slice().reverse(), currentGW });
   } catch {
-    res.json({ predictions: history.predictions.slice().reverse(), currentGW: null });
+    const league   = req.query.league || 'premier-league';
+    const filtered = history.predictions.filter(p =>
+      league === 'premier-league'
+        ? (!p.league || p.league === 'premier-league')
+        : p.league === league
+    );
+    res.json({ predictions: filtered.slice().reverse(), currentGW: null });
   }
 });
 
@@ -1763,14 +1854,27 @@ app.post('/api/refresh-cache', (req, res) => {
 // ─── Route: GET /api/seasons ──────────────────────────────────────────────────
 // Returns all seasons with prediction data: current season always included,
 // plus any archived prediction-history-{season}.json files found on disk.
-app.get('/api/seasons', (req, res) => {
+app.get('/api/seasons', async (req, res) => {
   try {
     const current = getCurrentSeason();
-    const archiveRe = /^prediction-history-(.+)\.json$/;
-    const archived = fs.readdirSync(__dirname)
-      .map(f => f.match(archiveRe)?.[1])
-      .filter(Boolean);
-    const all = [...new Set([current, ...archived])].sort().reverse();
+    let seasons = [current];
+
+    if (supabase) {
+      // Query all seasons stored in Supabase
+      const { data, error } = await supabase.from('prediction_history').select('season');
+      if (!error && data) {
+        seasons = [...new Set([current, ...data.map(r => r.season)])];
+      }
+    } else {
+      // File fallback: scan local archived JSON files
+      const archiveRe = /^prediction-history-(.+)\.json$/;
+      const archived = fs.readdirSync(__dirname)
+        .map(f => f.match(archiveRe)?.[1])
+        .filter(Boolean);
+      seasons = [...new Set([current, ...archived])];
+    }
+
+    const all = seasons.sort().reverse();
     res.json(all.map(s => ({ season: s, isCurrent: s === current })));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1975,10 +2079,10 @@ app.get('/api/weather/:fixtureId', async (req, res) => {
 
 // ─── Route: GET /api/market-movement/:fixtureId ──────────────────────────────
 
-app.get('/api/market-movement/:fixtureId', (req, res) => {
+app.get('/api/market-movement/:fixtureId', async (req, res) => {
   try {
     const fixtureId = Number(req.params.fixtureId);
-    const mh = loadMarketHistory();
+    const mh = await loadMarketHistory();
     const snapshots = mh[String(fixtureId)] ?? [];
 
     if (snapshots.length < 2) return res.json({ fixtureId, snapshots, movement: null });
@@ -2043,10 +2147,13 @@ app.post('/api/push/subscribe', (req, res) => {
 
 async function autoFillResults() {
   try {
-    const allFixtures = await fetchFixtures();
-    const unresolved  = history.predictions.filter(p => !p.result);
+    // ── Premier League: fill from FPL API ──────────────────────────────────────
+    const allFixtures  = await fetchFixtures();
+    const plUnresolved = history.predictions.filter(
+      p => !p.result && (!p.league || p.league === 'premier-league')
+    );
 
-    for (const entry of unresolved) {
+    for (const entry of plUnresolved) {
       const fix = allFixtures.find(f => f.id === entry.fixtureId);
       if (isFixtureSettled(fix)) {
         entry.result = {
@@ -2054,15 +2161,89 @@ async function autoFillResults() {
           awayGoals:  fix.team_a_score,
           settledAt:  new Date().toISOString(),
         };
-        // Refresh kickoff from live data — fixes entries where kickoff_time was
-        // null or stale when the prediction was first saved
         if (fix.kickoff_time) entry.kickoff = fix.kickoff_time;
+      }
+    }
+
+    // ── FD leagues: fill from in-memory match cache (no extra API calls) ───────
+    const fdUnresolved = history.predictions.filter(
+      p => !p.result && p.league && p.league !== 'premier-league'
+    );
+
+    // Group by competition code so we only look up each cache once
+    const byCode = {};
+    for (const entry of fdUnresolved) {
+      const code = FD_CODE[entry.league];
+      if (!code) continue;
+      (byCode[code] = byCode[code] ?? []).push(entry);
+    }
+
+    for (const [code, entries] of Object.entries(byCode)) {
+      const cached = getCache(`fd_matches_${code}`);
+      if (!cached) continue;   // skip if cache cold — next cron cycle will catch it
+      for (const entry of entries) {
+        const match = cached.find(m => m.id === entry.fixtureId);
+        if (match?.finished && match.homeGoals != null) {
+          entry.result = {
+            homeGoals: match.homeGoals,
+            awayGoals: match.awayGoals,
+            settledAt: new Date().toISOString(),
+          };
+        }
       }
     }
 
     saveHistory(history);
   } catch (err) {
     console.warn('[Auto-fill results]', err.message);
+  }
+}
+
+// ─── Background: proactive FD results backfill ───────────────────────────────
+// Runs every hour (staggered 30 min from the PL cron).
+// Unlike the FD section inside autoFillResults (which only reads cache), this
+// function actively fetches fresh match data from football-data.org so that
+// pending predictions get results filled even when the cache is cold.
+
+async function autoFillFdResults() {
+  try {
+    const fdUnresolved = history.predictions.filter(
+      p => !p.result && p.league && p.league !== 'premier-league'
+    );
+    if (!fdUnresolved.length) return;
+
+    // Determine which codes we actually need
+    const codes = [...new Set(
+      fdUnresolved.map(p => FD_CODE[p.league]).filter(Boolean)
+    )];
+
+    // Fetch all in parallel — getFdMatches uses cache + in-flight dedup
+    const results = await Promise.all(codes.map(code => getFdMatches(code).catch(() => null)));
+    const matchesByCode = Object.fromEntries(
+      codes.map((code, i) => [code, results[i] ?? []])
+    );
+
+    let filled = 0;
+    for (const entry of fdUnresolved) {
+      const code = FD_CODE[entry.league];
+      if (!code) continue;
+      const match = matchesByCode[code].find(m => m.id === entry.fixtureId);
+      if (match?.finished && match.homeGoals != null) {
+        entry.result = {
+          homeGoals:  match.homeGoals,
+          awayGoals:  match.awayGoals,
+          settledAt:  new Date().toISOString(),
+        };
+        filled++;
+      }
+    }
+
+    if (filled) {
+      saveHistory(history);
+      console.log(`[autoFillFdResults] filled ${filled} pending prediction(s)`);
+    }
+  } catch (err) {
+    console.warn('[autoFillFdResults]', err.message);
   }
 }
 
@@ -2164,8 +2345,11 @@ function checkSeasonRollover() {
   }
   if (history.season !== currentSeason) {
     const oldSeason = history.season;
-    const archivePath = path.join(__dirname, `prediction-history-${oldSeason}.json`);
-    fs.writeFileSync(archivePath, JSON.stringify(history, null, 2));
+    // Archive old season — to disk only in local dev (Supabase already has it by season key)
+    if (!supabase) {
+      const archivePath = path.join(__dirname, `prediction-history-${oldSeason}.json`);
+      try { fs.writeFileSync(archivePath, JSON.stringify(history, null, 2)); } catch {}
+    }
     ['rolling_ratings', 'elo_ratings', 'fixtures_all', 'bootstrap'].forEach(k => cache.delete(k));
     history = { season: currentSeason, predictions: [] };
     saveHistory(history);
@@ -2949,6 +3133,21 @@ function _loadPrePredFromDisk() {
   return null;
 }
 
+async function initWcPrePredictions() {
+  if (!supabase) return; // will fall through to disk/build in getPrePredictions
+  try {
+    const { data, error } = await supabase
+      .from('wc_predictions')
+      .select('data, saved_at')
+      .eq('id', 1)
+      .maybeSingle();
+    if (!error && data) {
+      _wcPrePredCache = { savedAt: data.saved_at, ...data.data };
+      console.log(`[WC] Loaded frozen pre-tournament predictions from Supabase (saved ${data.saved_at})`);
+    }
+  } catch (err) { console.warn('[Supabase initWcPrePredictions]', err.message); }
+}
+
 function _buildPrePredictions() {
   const groupMatchPredictions   = {};
   const groupPredictedStandings = {};
@@ -3041,16 +3240,27 @@ function _buildPrePredictions() {
 
 function getPrePredictions() {
   if (_wcPrePredCache) return _wcPrePredCache;
-  // Try disk first (survives restarts within same deploy)
+  // Try disk first (local dev fallback — Supabase is loaded at startup via initWcPrePredictions)
   _wcPrePredCache = _loadPrePredFromDisk();
   if (_wcPrePredCache) return _wcPrePredCache;
   // First ever call — compute, cache, and persist
   const built = _buildPrePredictions();
   _wcPrePredCache = { savedAt: new Date().toISOString(), ...built };
-  try {
-    fs.writeFileSync(WC_PRE_PRED_FILE, JSON.stringify(_wcPrePredCache, null, 2));
-    console.log('[WC] Pre-tournament predictions frozen and saved to disk');
-  } catch (err) { console.warn('[WC] Could not persist pre-preds:', err.message); }
+  const { savedAt, ...dataToStore } = _wcPrePredCache;
+  if (supabase) {
+    supabase
+      .from('wc_predictions')
+      .upsert({ id: 1, saved_at: savedAt, data: dataToStore }, { onConflict: 'id' })
+      .then(({ error }) => {
+        if (error) console.warn('[Supabase getPrePredictions save]', error.message);
+        else console.log('[WC] Pre-tournament predictions frozen and saved to Supabase');
+      });
+  } else {
+    try {
+      fs.writeFileSync(WC_PRE_PRED_FILE, JSON.stringify(_wcPrePredCache, null, 2));
+      console.log('[WC] Pre-tournament predictions frozen and saved to disk');
+    } catch (err) { console.warn('[WC] Could not persist pre-preds:', err.message); }
+  }
   return _wcPrePredCache;
 }
 
@@ -3247,9 +3457,523 @@ app.get('/api/wc/h2h', async (req, res) => {
   }
 });
 
+// ─── football-data.org pipeline (non-PL leagues) ─────────────────────────────
+// Free tier: 10 req/min, no commercial use.
+// League codes: PD=La Liga, BL1=Bundesliga, FL1=Ligue 1, SA=Serie A
+
+const FD_BASE = 'https://api.football-data.org/v4';
+const FD_KEY  = process.env.FOOTBALL_DATA_API_KEY;
+
+// Internal leagueId → football-data.org competition code
+const FD_CODE = {
+  'la-liga':    'PD',
+  'bundesliga': 'BL1',
+  'ligue-1':    'FL1',
+  'serie-a':    'SA',
+};
+
+async function fdFetch(path) {
+  if (!FD_KEY) throw new Error('FOOTBALL_DATA_API_KEY not set');
+  const res = await fetch(`${FD_BASE}${path}`, {
+    headers: { 'X-Auth-Token': FD_KEY },
+  });
+  if (!res.ok) throw new Error(`football-data.org ${res.status}: ${path}`);
+  return res.json();
+}
+
+// Normalise a fd match object into a simple shape the UI can consume
+function normaliseFdMatch(m, competitionCode) {
+  const homeGoals = m.score?.fullTime?.home ?? null;
+  const awayGoals = m.score?.fullTime?.away ?? null;
+  return {
+    id:           m.id,
+    competition:  competitionCode,
+    matchday:     m.matchday,
+    kickoffTime:  m.utcDate,
+    status:       m.status,                 // SCHEDULED | FINISHED | IN_PLAY | etc.
+    finished:     m.status === 'FINISHED',
+    homeTeam: {
+      id:        m.homeTeam.id,
+      name:      m.homeTeam.name,
+      shortName: m.homeTeam.shortName ?? m.homeTeam.tla ?? m.homeTeam.name,
+      crest:     m.homeTeam.crest,
+    },
+    awayTeam: {
+      id:        m.awayTeam.id,
+      name:      m.awayTeam.name,
+      shortName: m.awayTeam.shortName ?? m.awayTeam.tla ?? m.awayTeam.name,
+      crest:     m.awayTeam.crest,
+    },
+    homeGoals,
+    awayGoals,
+  };
+}
+
+// In-flight deduplication map — prevents thundering-herd rate-limit exhaustion
+// when multiple fixture cards fetch predictions simultaneously with a cold cache.
+const FD_MATCHES_INFLIGHT = new Map(); // competition code → Promise<allMatches>
+
+async function getFdMatches(code) {
+  const cacheKey = `fd_matches_${code}`;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  // If a fetch is already in-flight for this code, share that promise
+  if (FD_MATCHES_INFLIGHT.has(code)) return FD_MATCHES_INFLIGHT.get(code);
+
+  const promise = fdFetch(`/competitions/${code}/matches`)
+    .then(data => {
+      const matches = (data.matches ?? [])
+        .sort((a, b) => a.matchday - b.matchday || new Date(a.utcDate) - new Date(b.utcDate))
+        .map(m => normaliseFdMatch(m, code));
+      setCache(cacheKey, matches, TTL.XPTS);
+      return matches;
+    })
+    .finally(() => FD_MATCHES_INFLIGHT.delete(code));
+
+  FD_MATCHES_INFLIGHT.set(code, promise);
+  return promise;
+}
+
+// GET /api/fd/standings?league=la-liga
+app.get('/api/fd/standings', async (req, res) => {
+  const leagueId = req.query.league;
+  const code     = FD_CODE[leagueId];
+  if (!code) return res.status(400).json({ error: `Unknown league: ${leagueId}` });
+
+  const cacheKey = `fd_standings_${code}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const data  = await fdFetch(`/competitions/${code}/standings`);
+    const table = data.standings?.find(s => s.type === 'TOTAL')?.table ?? [];
+    const rows  = table.map(r => ({
+      position: r.position,
+      teamId:   r.team.id,
+      name:     r.team.name,
+      shortName: r.team.shortName ?? r.team.tla ?? r.team.name,
+      crest:    r.team.crest,
+      played:   r.playedGames,
+      won:      r.won,
+      drawn:    r.draw,
+      lost:     r.lost,
+      goalsFor: r.goalsFor,
+      goalsAgainst: r.goalsAgainst,
+      gd:       r.goalDifference,
+      points:   r.points,
+      form:     r.form,          // e.g. "W,D,L,W,W"
+    }));
+    setCache(cacheKey, rows, TTL.TABLE);
+    res.json(rows);
+  } catch (err) {
+    console.error('[FD standings]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/fd/fixtures?league=la-liga  — upcoming (SCHEDULED/TIMED) matches
+app.get('/api/fd/fixtures', async (req, res) => {
+  const leagueId = req.query.league;
+  const code     = FD_CODE[leagueId];
+  if (!code) return res.status(400).json({ error: `Unknown league: ${leagueId}` });
+
+  const cacheKey = `fd_fixtures_${code}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const data    = await fdFetch(`/competitions/${code}/matches?status=SCHEDULED,TIMED`);
+    const matches = (data.matches ?? [])
+      .sort((a, b) => new Date(a.utcDate) - new Date(b.utcDate))
+      .slice(0, 40)
+      .map(m => normaliseFdMatch(m, code));
+    setCache(cacheKey, matches, TTL.XPTS);
+    res.json(matches);
+  } catch (err) {
+    console.error('[FD fixtures]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/fd/matches?league=la-liga  — ALL matches (scheduled + finished), for matchday browser
+app.get('/api/fd/matches', async (req, res) => {
+  const leagueId = req.query.league;
+  const code     = FD_CODE[leagueId];
+  if (!code) return res.status(400).json({ error: `Unknown league: ${leagueId}` });
+
+  try {
+    const matches = await getFdMatches(code);
+    res.json(matches);
+  } catch (err) {
+    console.error('[FD matches]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/fd/results?league=la-liga  — recent finished matches
+app.get('/api/fd/results', async (req, res) => {
+  const leagueId = req.query.league;
+  const code     = FD_CODE[leagueId];
+  if (!code) return res.status(400).json({ error: `Unknown league: ${leagueId}` });
+
+  const cacheKey = `fd_results_${code}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const data    = await fdFetch(`/competitions/${code}/matches?status=FINISHED`);
+    const matches = (data.matches ?? [])
+      .sort((a, b) => new Date(b.utcDate) - new Date(a.utcDate))
+      .slice(0, 20)
+      .map(m => normaliseFdMatch(m, code));
+    setCache(cacheKey, matches, TTL.XPTS);
+    res.json(matches);
+  } catch (err) {
+    console.error('[FD results]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── FD prediction helpers ────────────────────────────────────────────────────
+
+// Build form data from normalised FD matches (same shape as PL buildFormData)
+function buildFdFormData(allMatches) {
+  const teamIds = new Set();
+  for (const m of allMatches) {
+    teamIds.add(m.homeTeam.id);
+    teamIds.add(m.awayTeam.id);
+  }
+
+  const wavg = (games, goalsFor, goalsAgainst) => {
+    if (!games.length) return { sc: 0, co: 0 };
+    const ws   = FORM_WEIGHTS.slice(0, games.length);
+    const wSum = ws.reduce((a, b) => a + b, 0) || 1;
+    let sc = 0, co = 0;
+    for (let i = 0; i < games.length; i++) {
+      const w = (FORM_WEIGHTS[i] ?? 0) / wSum;
+      sc += goalsFor(games[i])    * w;
+      co += goalsAgainst(games[i]) * w;
+    }
+    return { sc, co };
+  };
+
+  const formMap = {};
+
+  for (const teamId of teamIds) {
+    const allPlayed = allMatches
+      .filter(m => m.finished && m.homeGoals != null &&
+        (m.homeTeam.id === teamId || m.awayTeam.id === teamId))
+      .sort((a, b) => new Date(b.kickoffTime) - new Date(a.kickoffTime));
+
+    const homePlayed = allPlayed.filter(m => m.homeTeam.id === teamId).slice(0, 5);
+    const awayPlayed = allPlayed.filter(m => m.awayTeam.id === teamId).slice(0, 5);
+
+    const homeRecent = wavg(homePlayed, m => m.homeGoals ?? 0, m => m.awayGoals ?? 0);
+    const awayRecent = wavg(awayPlayed, m => m.awayGoals ?? 0, m => m.homeGoals ?? 0);
+
+    let seasonHomeScored = 0, seasonHomeConceded = 0;
+    let seasonAwayScored = 0, seasonAwayConceded = 0;
+    for (const m of allPlayed) {
+      if (m.homeTeam.id === teamId) {
+        seasonHomeScored   += m.homeGoals ?? 0;
+        seasonHomeConceded += m.awayGoals ?? 0;
+      } else {
+        seasonAwayScored   += m.awayGoals ?? 0;
+        seasonAwayConceded += m.homeGoals ?? 0;
+      }
+    }
+    const allHome = allPlayed.filter(m => m.homeTeam.id === teamId);
+    const allAway = allPlayed.filter(m => m.awayTeam.id === teamId);
+
+    const mixed = allPlayed.slice(0, 5);
+    const mixedStats = wavg(
+      mixed,
+      m => (m.homeTeam.id === teamId ? m.homeGoals : m.awayGoals) ?? 0,
+      m => (m.homeTeam.id === teamId ? m.awayGoals : m.homeGoals) ?? 0,
+    );
+
+    formMap[teamId] = {
+      homeScored:    homeRecent.sc,
+      homeConceded:  homeRecent.co,
+      homeGames:     homePlayed.length,
+      awayScored:    awayRecent.sc,
+      awayConceded:  awayRecent.co,
+      awayGames:     awayPlayed.length,
+      seasonHomeScored,  seasonHomeConceded,  seasonHomeGames: allHome.length,
+      seasonAwayScored,  seasonAwayConceded,  seasonAwayGames: allAway.length,
+      seasonScored:   seasonHomeScored + seasonAwayScored,
+      seasonConceded: seasonHomeConceded + seasonAwayConceded,
+      seasonGames:    allPlayed.length,
+      scored:   mixedStats.sc,
+      conceded: mixedStats.co,
+      games:    1,
+      recentResults: mixed.map(m => ({
+        homeGoals: m.homeTeam.id === teamId ? m.homeGoals : m.awayGoals,
+        awayGoals: m.homeTeam.id === teamId ? m.awayGoals : m.homeGoals,
+      })),
+    };
+  }
+
+  return formMap;
+}
+
+function calcFdLeagueAverages(allMatches) {
+  const finished = allMatches.filter(m => m.finished && m.homeGoals != null);
+  if (!finished.length) return { home: 1.52, away: 1.18 };
+  const totalHome = finished.reduce((s, m) => s + m.homeGoals, 0);
+  const totalAway = finished.reduce((s, m) => s + m.awayGoals, 0);
+  return {
+    home: totalHome / finished.length,
+    away: totalAway / finished.length,
+  };
+}
+
+// Convert normalised FD match shape → FPL-like shape for buildRollingRatings / buildEloRatings
+function fdMatchesToFplShape(allMatches) {
+  return allMatches
+    .filter(m => m.finished && m.homeGoals != null)
+    .map(m => ({
+      team_h:       m.homeTeam.id,
+      team_a:       m.awayTeam.id,
+      team_h_score: m.homeGoals,
+      team_a_score: m.awayGoals,
+      kickoff_time: m.kickoffTime,
+      finished:     true,
+    }));
+}
+
+// GET /api/fd/predictions?league=la-liga&fixtureId=<id>
+app.get('/api/fd/predictions', async (req, res) => {
+  const leagueId  = req.query.league;
+  const fixtureId = Number(req.query.fixtureId);
+  const code      = FD_CODE[leagueId];
+
+  if (!code)      return res.status(400).json({ error: `Unknown league: ${leagueId}` });
+  if (!fixtureId) return res.status(400).json({ error: 'fixtureId required' });
+
+  const cacheKey = `fd_pred_${code}_${fixtureId}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const allMatches = await getFdMatches(code);
+
+    const match = allMatches.find(m => m.id === fixtureId);
+    if (!match) return res.status(404).json({ error: 'Fixture not found' });
+
+    const leagueAvg      = calcFdLeagueAverages(allMatches);
+    const fplShape       = fdMatchesToFplShape(allMatches);
+    const formData       = buildFdFormData(allMatches);
+    const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
+    const eloRatings     = buildEloRatings(fplShape);
+
+    const prediction = predict({
+      homeTeam:      { id: match.homeTeam.id, name: match.homeTeam.name },
+      awayTeam:      { id: match.awayTeam.id, name: match.awayTeam.name },
+      leagueAvgHome: leagueAvg.home,
+      leagueAvgAway: leagueAvg.away,
+      xGData:        {},   // Understat integration planned for future
+      formData,
+      h2hData:       [],
+      marketOdds:    null,
+      homeInjuries:  0,
+      awayInjuries:  0,
+      rollingRatings,
+      eloRatings,
+    });
+
+    const result = {
+      fixtureId,
+      matchday:    match.matchday,
+      kickoffTime: match.kickoffTime,
+      homeTeam:    match.homeTeam,
+      awayTeam:    match.awayTeam,
+      prediction,
+      generatedAt: new Date().toISOString(),
+    };
+
+    setCache(cacheKey, result, TTL.XPTS);
+
+    // Save to prediction tracker if not already stored
+    const alreadyTracked = history.predictions.find(
+      p => p.fixtureId === fixtureId && p.league === leagueId
+    );
+    if (!alreadyTracked) {
+      const immediateResult = match.finished && match.homeGoals != null
+        ? { homeGoals: match.homeGoals, awayGoals: match.awayGoals, settledAt: new Date().toISOString() }
+        : null;
+      history.predictions.push({
+        fixtureId,
+        league:    leagueId,
+        gameweek:  match.matchday,   // matchday used as gameweek equivalent
+        kickoff:   match.kickoffTime,
+        homeTeam:  match.homeTeam,
+        awayTeam:  match.awayTeam,
+        prediction,
+        trackedAt: new Date().toISOString(),
+        result:    immediateResult,
+      });
+      saveHistory(history);
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('[FD predictions]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/fd/h2h?league=la-liga&homeTeamId=X&awayTeamId=Y
+// Filters head-to-head from the cached all-matches data — zero extra FD API calls.
+// Returns matches shaped for H2HPanel: { date, homeTeam, awayTeam, homeGoals, awayGoals }
+app.get('/api/fd/h2h', async (req, res) => {
+  const { league, homeTeamId, awayTeamId } = req.query;
+  const code = FD_CODE[league];
+  if (!code || !homeTeamId || !awayTeamId) {
+    return res.status(400).json({ error: 'league, homeTeamId and awayTeamId required' });
+  }
+
+  const cacheKey = `fd_h2h_${code}_${homeTeamId}_${awayTeamId}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const allMatches = await getFdMatches(code);
+
+    const hId = Number(homeTeamId);
+    const aId = Number(awayTeamId);
+
+    const h2h = allMatches
+      .filter(m => m.finished && m.homeGoals != null && (
+        (m.homeTeam.id === hId && m.awayTeam.id === aId) ||
+        (m.homeTeam.id === aId && m.awayTeam.id === hId)
+      ))
+      .sort((a, b) => new Date(b.kickoffTime) - new Date(a.kickoffTime))
+      .slice(0, 10)
+      .map(m => ({
+        date:      m.kickoffTime,
+        homeTeam:  m.homeTeam.name,
+        awayTeam:  m.awayTeam.name,
+        homeGoals: m.homeGoals,
+        awayGoals: m.awayGoals,
+      }));
+
+    setCache(cacheKey, h2h, TTL.XPTS);
+    res.json(h2h);
+  } catch (err) {
+    console.error('[FD H2H]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/fd/opponent-analysis?league=la-liga&opponentId=X&opponentName=Y&myTeamName=Z
+// AI scout report derived from cached FD match data (no FPL dependency).
+app.get('/api/fd/opponent-analysis', async (req, res) => {
+  const { league, opponentId, opponentName, myTeamName = 'your team' } = req.query;
+  const code = FD_CODE[league];
+  if (!code || !opponentId || !opponentName) {
+    return res.status(400).json({ error: 'league, opponentId and opponentName required' });
+  }
+  if (!groq) return res.status(503).json({ error: 'AI analysis not configured' });
+
+  const cacheKey = `fd_opp_${code}_${opponentId}_${encodeURIComponent(myTeamName)}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const allMatches = await getFdMatches(code);
+
+    const oppId = Number(opponentId);
+    const last5 = allMatches
+      .filter(m => m.finished && m.homeGoals != null &&
+        (m.homeTeam.id === oppId || m.awayTeam.id === oppId))
+      .sort((a, b) => new Date(b.kickoffTime) - new Date(a.kickoffTime))
+      .slice(0, 5);
+
+    const formStr = last5.map(m => {
+      const isHome = m.homeTeam.id === oppId;
+      const tg = isHome ? m.homeGoals : m.awayGoals;
+      const og = isHome ? m.awayGoals : m.homeGoals;
+      return tg > og ? 'W' : tg < og ? 'L' : 'D';
+    }).join('');
+
+    const n  = last5.length || 1;
+    const gf = last5.reduce((s, m) => s + (m.homeTeam.id === oppId ? m.homeGoals : m.awayGoals), 0);
+    const ga = last5.reduce((s, m) => s + (m.homeTeam.id === oppId ? m.awayGoals : m.homeGoals), 0);
+
+    const resultsSummary = last5.map(m => {
+      const isHome  = m.homeTeam.id === oppId;
+      const opp     = isHome ? m.awayTeam.name : m.homeTeam.name;
+      const score   = `${m.homeGoals}–${m.awayGoals}`;
+      const venue   = isHome ? 'H' : 'A';
+      const r       = (isHome ? m.homeGoals > m.awayGoals : m.awayGoals > m.homeGoals) ? 'W'
+                    : m.homeGoals === m.awayGoals ? 'D' : 'L';
+      return `${r} ${venue} vs ${opp} (${score})`;
+    }).join(', ');
+
+    const systemPrompt = `You are an elite football scout writing for ${myTeamName}'s coaching staff. Be sharp, specific, and analytical — no fluff. Use **bold** for key stats and tactical observations. Under 260 words. Do NOT name individual players unless their name appears in the data provided — describe team-level patterns only.`;
+    const userPrompt   = `Scout report: **${opponentName}** as ${myTeamName}'s upcoming opponent.
+
+Last 5 form: ${formStr || 'unknown'}
+Avg goals scored per game: ${(gf / n).toFixed(2)}
+Avg goals conceded per game: ${(ga / n).toFixed(2)}
+Recent results (${n} games): ${resultsSummary || 'No data'}
+
+Cover in 3 tight paragraphs: (1) attacking threat and danger patterns, (2) defensive vulnerabilities ${myTeamName} can exploit, (3) the key tactical battle that will decide the game.`;
+
+    const analysis = await groqChat([
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userPrompt },
+    ]);
+
+    const result = { opponentId: oppId, opponentName, analysis, formStr };
+    setCache(cacheKey, result, TTL.XG);
+    res.json(result);
+  } catch (err) {
+    console.error('[FD opponent-analysis]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/fd/scorers?league=la-liga  — top scorers from FD API
+app.get('/api/fd/scorers', async (req, res) => {
+  const leagueId = req.query.league;
+  const code     = FD_CODE[leagueId];
+  if (!code) return res.status(400).json({ error: `Unknown league: ${leagueId}` });
+
+  const cacheKey = `fd_scorers_${code}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const data    = await fdFetch(`/competitions/${code}/scorers?limit=20`);
+    const scorers = (data.scorers ?? []).map((s, i) => ({
+      rank:    i + 1,
+      player:  { id: s.player.id, name: s.player.name, nationality: s.player.nationality ?? null },
+      team: {
+        id:        s.team.id,
+        name:      s.team.name,
+        shortName: s.team.shortName ?? s.team.tla ?? s.team.name,
+        crest:     s.team.crest ?? null,
+      },
+      goals:        s.goals      ?? 0,
+      assists:      s.assists    ?? 0,
+      penalties:    s.penalties  ?? 0,
+      playedMatches: s.playedMatches ?? 0,
+    }));
+    setCache(cacheKey, scorers, TTL.XG);   // 1-hour cache — changes infrequently
+    res.json(scorers);
+  } catch (err) {
+    console.error('[FD scorers]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Cron jobs ────────────────────────────────────────────────────────────────
 
-cron.schedule('0 * * * *',    autoFillResults);            // every hour
+cron.schedule('0 * * * *',    autoFillResults);            // every hour — PL
+cron.schedule('30 * * * *',   autoFillFdResults);          // every hour, staggered — FD leagues
 cron.schedule('*/15 * * * *', checkKickoffNotifications);  // every 15 min
 cron.schedule('0 8 * * *',    checkSeasonRollover);        // daily at 8am
 
@@ -3265,19 +3989,26 @@ if (process.env.NODE_ENV === 'production') {
 } else {
   app.get('*', (req, res) => {
     if (!req.path.startsWith('/api')) {
-      res.status(200).send('Chelsea Pred API running. Start the frontend with: npm run client');
+      res.status(200).send('MatchIQ API running. Start the frontend with: npm run client');
     }
   });
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`\n⚽ Chelsea Pred backend running on http://localhost:${PORT}`);
-  console.log(`   Groq: ${groq ? '✅ connected' : '❌ no GROQ_API_KEY'}`);
-  console.log(`   Push: ${process.env.VAPID_PUBLIC_KEY ? '✅ configured' : '⚠️  no VAPID keys'}\n`);
+app.listen(PORT, async () => {
+  console.log(`\n⚽ MatchIQ backend running on http://localhost:${PORT}`);
+  console.log(`   Groq:     ${groq ? '✅ connected' : '❌ no GROQ_API_KEY'}`);
+  console.log(`   Push:     ${process.env.VAPID_PUBLIC_KEY ? '✅ configured' : '⚠️  no VAPID keys'}`);
+  console.log(`   Supabase: ${supabase ? '✅ connected' : '⚠️  no SUPABASE_URL/KEY — using local files'}\n`);
+
+  // Load persistent data from Supabase (or fall back to local files)
+  history = await loadHistory();
+  await initWcPrePredictions();
+
   checkSeasonRollover();
   runHealthChecks();
   backfillPendingResults();
   autoFillResults();
+  autoFillFdResults();
 });

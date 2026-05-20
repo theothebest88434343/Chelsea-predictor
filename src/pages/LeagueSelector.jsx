@@ -2,15 +2,34 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import ClubBadge from '../components/ClubBadge';
-import { LEAGUES } from '../utils/leagues.jsx';
+import { LEAGUES, getLeague } from '../utils/leagues.jsx';
 
-// ─── Team picker (PL only for now) ───────────────────────────────────────────
+// ─── Team picker ─────────────────────────────────────────────────────────────
+// PL  → /api/teams (FPL data, ClubBadge SVGs)
+// non-PL → /api/fd/standings (football-data.org crests)
 
-function TeamPicker({ onPick, onBack }) {
-  const { data: teams, loading } = useFetch('/api/teams');
+function TeamPicker({ leagueId, onPick, onBack }) {
+  const isPL = leagueId === 'premier-league';
+
+  // PL source
+  const { data: plTeams,  loading: plLoading  } = useFetch(isPL  ? '/api/teams' : null);
+  // non-PL source — standings rows already have name, shortName, crest, teamId
+  const { data: fdRows,   loading: fdLoading   } = useFetch(!isPL ? `/api/fd/standings?league=${leagueId}` : null);
+
+  const loading = isPL ? plLoading : fdLoading;
+
   const [query, setQuery] = useState('');
 
-  const filtered = (teams ?? []).filter(t =>
+  // Strip leading ordinal prefixes like "1. " from FD short names ("1. FC Köln" → "FC Köln")
+  const cleanShort = s => s.replace(/^\d+\.\s+/, '');
+
+  // Normalise both sources to { id, name, short, code, crest }, sorted A→Z by displayed label
+  const teams = (isPL
+    ? (plTeams ?? []).map(t => ({ id: t.id, name: t.name, short: t.short,               code: t.code, crest: null    }))
+    : (fdRows  ?? []).map(r => ({ id: r.teamId, name: r.name, short: cleanShort(r.shortName), code: null,   crest: r.crest }))
+  ).sort((a, b) => a.short.localeCompare(b.short));
+
+  const filtered = teams.filter(t =>
     query === '' ||
     t.name.toLowerCase().includes(query.toLowerCase()) ||
     t.short.toLowerCase().includes(query.toLowerCase())
@@ -64,8 +83,13 @@ function TeamPicker({ onPick, onBack }) {
                 cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
               }}
             >
-              <ClubBadge code={team.code} short={team.short} size={30} />
-              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.3 }}>
+              {team.crest ? (
+                <img src={team.crest} alt={team.short}
+                  style={{ width: 30, height: 30, objectFit: 'contain' }} />
+              ) : (
+                <ClubBadge code={team.code} short={team.short} size={30} />
+              )}
+              <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.3, textAlign: 'center', lineHeight: 1.2 }}>
                 {team.short}
               </span>
             </button>
@@ -126,26 +150,44 @@ export default function LeagueSelector() {
   const [step,   setStep]   = useState('league'); // 'league' | 'team'
   const [picked, setPicked] = useState(null);     // selected LEAGUES entry
 
-  // Auto-redirect returning users — skip if the user tapped "switch" in the nav badge
+  // Auto-redirect returning users — skip if the user tapped "switch" in the nav badge.
+  // Tournament leagues (e.g. world-cup) have no team picker so don't require a stored team.
   useEffect(() => {
     if (isSwitch) return;
     const pref = localStorage.getItem('preferredLeague');
     const team = localStorage.getItem('favouriteTeam');
-    if (pref && team) {
+    if (!pref) return;
+    const league = getLeague(pref);
+    if (league.tournament || team) {
       navigate(`/league/${pref}`, { replace: true });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLeagueClick = (league) => {
     if (!league.available) return;
+    // Save immediately so BottomNav links update even before a team is picked,
+    // then notify BottomNav (same-tab localStorage changes don't fire 'storage').
+    localStorage.setItem('preferredLeague', league.id);
+    window.dispatchEvent(new Event('preferredLeagueChange'));
+    // Tournament leagues (e.g. World Cup) have no club teams — skip the team picker.
+    if (league.tournament) {
+      navigate(`/league/${league.id}`, { replace: true });
+      return;
+    }
     setPicked(league);
     setStep('team');
   };
 
   const handleTeamPick = (team) => {
-    const teamData = { id: team.id, name: team.name, short: team.short, code: team.code };
+    // team is already normalised by TeamPicker: { id, name, short, code, crest }
     localStorage.setItem('preferredLeague', picked.id);
-    localStorage.setItem('favouriteTeam', JSON.stringify(teamData));
+    localStorage.setItem('favouriteTeam', JSON.stringify({
+      id:    team.id,
+      name:  team.name,
+      short: team.short,
+      code:  team.code,   // null for non-PL teams
+      crest: team.crest,  // null for PL teams
+    }));
     navigate(`/league/${picked.id}`, { replace: true });
   };
 
@@ -157,7 +199,7 @@ export default function LeagueSelector() {
   if (step === 'team' && picked) {
     return (
       <div>
-        <TeamPicker onPick={handleTeamPick} onBack={handleBack} />
+        <TeamPicker leagueId={picked.id} onPick={handleTeamPick} onBack={handleBack} />
       </div>
     );
   }

@@ -6,6 +6,7 @@ import { usePrediction } from '../hooks/usePredictions';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { ConfidenceBadge } from '../utils/confidence.jsx';
 import { ComingSoon } from '../utils/leagues.jsx';
+import FdHome from './FdHome';
 
 function Countdown({ kickoffTime }) {
   const [now, setNow] = useState(Date.now());
@@ -131,7 +132,7 @@ export default function Home() {
   const nextFixture = fixtures?.[0] ?? null;
   const { data: prediction, loading: pLoading } = usePrediction(nextFixture?.id);
 
-  if (leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+  if (leagueId !== 'premier-league') return <FdHome />;
 
   if (fLoading) {
     return <div className="loading-card"><div className="spinner" /><div>Loading {favTeam.name} data…</div></div>;

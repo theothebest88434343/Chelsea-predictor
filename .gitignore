@@ -2,3 +2,4 @@ node_modules/
 dist/
 .env
 prediction-history-*.json
+.claude/

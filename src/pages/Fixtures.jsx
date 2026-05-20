@@ -19,6 +19,7 @@ import TeamSwitcher from '../components/TeamSwitcher';
 import { ConfidenceBadge } from '../utils/confidence.jsx';
 import ClubBadge from '../components/ClubBadge';
 import { ComingSoon } from '../utils/leagues.jsx';
+import FdFixtures from './FdFixtures';
 
 // ─── Probability bar ──────────────────────────────────────────────────────────
 
@@ -320,7 +321,7 @@ export default function Fixtures() {
   const { data: allFixtures, loading, error } = useFetch('/api/all-fixtures');
   const [selectedTeam, setSelectedTeam] = useState(null);
 
-  if (!loading && leagueId !== 'premier-league') return <ComingSoon leagueId={leagueId} />;
+  if (leagueId !== 'premier-league') return <FdFixtures />;
 
   if (loading) return <div className="loading-card"><div className="spinner" /><div>Loading fixtures…</div></div>;
   if (error)   return <div className="error-card">Failed to load fixtures: {error}</div>;

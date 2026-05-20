@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import BottomNav from './components/BottomNav';
 import NotificationBell from './components/NotificationBell';
 import Home from './pages/Home';
@@ -7,8 +7,13 @@ import League from './pages/League';
 import Stats from './pages/Stats';
 import Round from './pages/Round';
 import WorldCup from './pages/WorldCup';
+
 import LeagueSelector from './pages/LeagueSelector';
 import { getLeague } from './utils/leagues.jsx';
+
+// Forces a full remount of any league-scoped page when the leagueId changes,
+// so useState initialises fresh and no stale tab/team selections carry over.
+function K({ C }) { const { leagueId } = useParams(); return <C key={leagueId} />; }
 
 // ─── League badge in top bar ──────────────────────────────────────────────────
 // Reads the current leagueId from the URL and renders a compact tappable badge.
@@ -54,7 +59,7 @@ export default function App() {
       <header className="top-bar">
         <div className="top-bar-inner">
           <LeagueBadge />
-          <span className="top-bar-logo">CHELSEA PRED</span>
+          <span className="top-bar-logo">MATCHIQ</span>
           <NotificationBell />
         </div>
       </header>
@@ -64,21 +69,27 @@ export default function App() {
           {/* League selector / onboarding */}
           <Route path="/"                   element={<LeagueSelector />} />
 
-          {/* Scoped league routes */}
-          <Route path="/league/:leagueId"   element={<Home />} />
-          <Route path="/fixtures/:leagueId" element={<Fixtures />} />
-          <Route path="/table/:leagueId"    element={<League />} />
-          <Route path="/stats/:leagueId"    element={<Stats />} />
-          <Route path="/round/:leagueId"    element={<Round />} />
+          {/* World Cup — all 5 tabs render the same standalone tournament page */}
+          <Route path="/league/world-cup"    element={<WorldCup />} />
+          <Route path="/fixtures/world-cup"  element={<WorldCup />} />
+          <Route path="/table/world-cup"     element={<WorldCup />} />
+          <Route path="/stats/world-cup"     element={<WorldCup />} />
+          <Route path="/round/world-cup"     element={<WorldCup />} />
 
-          {/* World Cup — no league scope */}
-          <Route path="/worldcup"           element={<WorldCup />} />
+          {/* Scoped league routes — K wrapper remounts on league change */}
+          <Route path="/league/:leagueId"   element={<K C={Home}     />} />
+          <Route path="/fixtures/:leagueId" element={<K C={Fixtures} />} />
+          <Route path="/table/:leagueId"    element={<K C={League}   />} />
+          <Route path="/stats/:leagueId"    element={<K C={Stats}    />} />
+          <Route path="/round/:leagueId"    element={<K C={Round}    />} />
 
           {/* Legacy unscoped routes → redirect to PL equivalent */}
           <Route path="/fixtures"  element={<Navigate to="/fixtures/premier-league"  replace />} />
           <Route path="/league"    element={<Navigate to="/table/premier-league"     replace />} />
           <Route path="/stats"     element={<Navigate to="/stats/premier-league"     replace />} />
           <Route path="/round"     element={<Navigate to="/round/premier-league"     replace />} />
+          {/* Old standalone World Cup URL → new league-scoped route */}
+          <Route path="/worldcup"  element={<Navigate to="/league/world-cup"         replace />} />
 
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
