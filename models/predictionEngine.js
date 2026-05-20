@@ -2,12 +2,16 @@
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const SIMULATIONS       = 10_000;
-// Dixon-Coles τ correction — reinstated at RHO=−0.11 after post-λA-fix RHO sweep.
-// Prior removal was correct at the time (RHO=−0.13 overcorrected draw by +2.6pp).
-// After fixing Jensen's-bias λA suppression, the raw Poisson draw gap is −2.53pp
-// (actual 27.12%, raw Poisson 24.59%), and the sweep now ranks RHO=−0.11 optimal.
+// Dixon-Coles τ correction — dynamic RHO replaces the former fixed −0.11.
+// RHO_REF=−0.11 is the calibrated value at typical λ_geo≈1.34 (sqrt(1.52×1.18)).
+// High-scoring matches (high λ) have weaker low-score correlation → RHO toward −0.05.
+// Defensive matches (low λ) have stronger correlation → RHO toward −0.18.
 // τ applies only to 0-0, 1-0, 0-1, 1-1 cells — all other scores unaffected.
-const RHO = -0.11;
+const RHO_REF    = -0.11;  // reference RHO at typical geometric-mean lambda
+const RHO_MIN    = -0.18;  // strongest correction — very defensive matches
+const RHO_MAX    = -0.05;  // weakest correction — high-scoring matches
+const REF_LAMBDA =  1.34;  // sqrt(leagueAvgHome * leagueAvgAway) at default averages
+const RHO_SLOPE  =  0.075; // RHO shift per unit of geometric-mean lambda
 const FORM_WEIGHTS      = [0.30, 0.24, 0.20, 0.16, 0.10]; // recency-weighted, smooth tail
 const STREAK_WEIGHTS    = [0.35, 0.25, 0.20, 0.12, 0.08]; // most-recent first — steeper than FORM_WEIGHTS
 const STREAK_CAP        = 0.18;  // ±18% max swing from pure W/D/L streak signal
@@ -55,19 +59,27 @@ const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 // ─── Dixon-Coles τ correction ────────────────────────────────────────────────
 // Adjusts joint probability of low-score outcomes to capture goal correlation.
 // Only cells (0,0), (1,0), (0,1), (1,1) are modified — all others τ=1.
-// With RHO=−0.11: 0-0 and 1-1 are boosted (more draws), 1-0 and 0-1 are reduced.
+// rho is passed in from buildScoreMatrix — each match uses a dynamic value.
 
-function tau(h, a, lH, lA) {
-  if (h === 0 && a === 0) return 1 - RHO * lH * lA;
-  if (h === 1 && a === 0) return 1 + RHO * lA;
-  if (h === 0 && a === 1) return 1 + RHO * lH;
-  if (h === 1 && a === 1) return 1 - RHO;
+function tau(h, a, lH, lA, rho) {
+  if (h === 0 && a === 0) return 1 - rho * lH * lA;
+  if (h === 1 && a === 0) return 1 + rho * lA;
+  if (h === 0 && a === 1) return 1 + rho * lH;
+  if (h === 1 && a === 1) return 1 - rho;
   return 1;
 }
 
-// ─── Score matrix (Poisson + Dixon-Coles τ at RHO=−0.11) ─────────────────────
+// Dynamic RHO: higher geometric-mean lambda → less low-score correlation → weaker correction.
+// At λ_geo = REF_LAMBDA (≈1.34) this returns RHO_REF (−0.11), preserving prior calibration.
+function dynamicRho(lH, lA) {
+  const geoMean = Math.sqrt(lH * lA);
+  return clamp(RHO_REF + RHO_SLOPE * (geoMean - REF_LAMBDA), RHO_MIN, RHO_MAX);
+}
+
+// ─── Score matrix (Poisson + Dixon-Coles τ with dynamic RHO) ─────────────────
 
 function buildScoreMatrix(lH, lA) {
+  const rho    = dynamicRho(lH, lA);
   const matrix = [];
   let total = 0;
 
@@ -75,7 +87,7 @@ function buildScoreMatrix(lH, lA) {
     const row = [];
     for (let a = 0; a < MATRIX_SIZE; a++) {
       // Apply τ correction; clamp to 0 to prevent negative probabilities
-      const p = Math.max(0, poissonProb(h, lH) * poissonProb(a, lA) * tau(h, a, lH, lA));
+      const p = Math.max(0, poissonProb(h, lH) * poissonProb(a, lA) * tau(h, a, lH, lA, rho));
       row.push(p);
       total += p;
     }

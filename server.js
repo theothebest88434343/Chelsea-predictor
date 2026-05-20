@@ -4169,10 +4169,163 @@ app.get('/api/fd/scorers', async (req, res) => {
   }
 });
 
+// ─── Background: bulk prediction pre-generation ──────────────────────────────
+// Runs every hour at :45 to pre-generate predictions for all upcoming fixtures
+// across every league so stats/accuracy tracking starts from kickoff, not first
+// user visit. Uses the same model path as the on-demand endpoints.
+// All data sources (FD matches, xG, odds, rolling ratings) are cached so this
+// function adds virtually no extra API cost when the caches are warm.
+
+async function preFillPredictions() {
+  let generated = 0;
+
+  // ── Premier League ──────────────────────────────────────────────────────────
+  try {
+    const [bs, allFixtures, xgRaw, oddsMap, rollingRatings, eloRatings] =
+      await Promise.all([
+        fetchBootstrap(),
+        fetchFixtures(),
+        fetchUnderstatXG(),
+        fetchOdds().catch(() => ({})),
+        getRollingRatings(),
+        getEloRatings(),
+      ]);
+
+    const { teams }  = bs;
+    const formDataPL = await buildFormData(allFixtures, teams, null);
+    const leagueAvg  = calcLeagueAverages(allFixtures);
+    const allRefStats = buildRefereeStats(allFixtures);
+
+    const xGData = {};
+    for (const team of teams) {
+      const usName = UNDERSTAT_NAME_MAP[team.name] ?? team.name;
+      if (xgRaw[usName]) xGData[team.id] = xgRaw[usName];
+    }
+
+    const upcoming = allFixtures.filter(f => !isFixtureSettled(f) && f.kickoff_time);
+    for (const fix of upcoming) {
+      const alreadyTracked = history.predictions.find(
+        p => p.fixtureId === fix.id && (!p.league || p.league === 'premier-league')
+      );
+      if (alreadyTracked) continue;
+
+      const homeTeam = teams.find(t => t.id === fix.team_h);
+      const awayTeam = teams.find(t => t.id === fix.team_a);
+      if (!homeTeam || !awayTeam) continue;
+
+      const marketOdds = oddsMap[`${homeTeam.name}_${awayTeam.name}`] ?? null;
+
+      const prediction = predict({
+        homeTeam:      { id: homeTeam.id, name: homeTeam.name },
+        awayTeam:      { id: awayTeam.id, name: awayTeam.name },
+        leagueAvgHome: leagueAvg.home,
+        leagueAvgAway: leagueAvg.away,
+        xGData,
+        formData:      formDataPL,
+        h2hData:       [],
+        marketOdds,
+        homeInjuries:  0,
+        awayInjuries:  0,
+        rollingRatings,
+        eloRatings,
+      });
+
+      history.predictions.push({
+        fixtureId:  fix.id,
+        league:     'premier-league',
+        gameweek:   fix.event,
+        kickoff:    fix.kickoff_time,
+        homeTeam:   { id: homeTeam.id, name: homeTeam.name, short: homeTeam.short_name, shortName: homeTeam.short_name, code: homeTeam.code },
+        awayTeam:   { id: awayTeam.id, name: awayTeam.name, short: awayTeam.short_name, shortName: awayTeam.short_name, code: awayTeam.code },
+        prediction,
+        trackedAt:  new Date().toISOString(),
+        result:     null,
+      });
+      generated++;
+    }
+  } catch (err) {
+    console.warn('[PreFill PL]', err.message);
+  }
+
+  // ── FD leagues (La Liga, Bundesliga, Ligue 1, Serie A) ─────────────────────
+  for (const leagueId of Object.keys(FD_CODE)) {
+    try {
+      const code = FD_CODE[leagueId];
+
+      const [allMatches, xgRaw] = await Promise.all([
+        getFdMatches(code),
+        fetchUnderstatXGForLeague(leagueId),
+      ]);
+
+      // Build xGData keyed by FD team ID
+      const nameMap = FD_TO_UNDERSTAT_NAME[leagueId] ?? {};
+      const xGData  = {};
+      for (const m of allMatches) {
+        for (const side of ['homeTeam', 'awayTeam']) {
+          const team = m[side];
+          if (xGData[team.id]) continue;
+          const usTitle = nameMap[team.name] ?? team.name;
+          if (xgRaw[usTitle]) xGData[team.id] = xgRaw[usTitle];
+        }
+      }
+
+      const leagueAvg      = calcFdLeagueAverages(allMatches);
+      const fplShape       = fdMatchesToFplShape(allMatches);
+      const formData       = buildFdFormData(allMatches);
+      const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
+      const eloRatings     = buildEloRatings(fplShape);
+
+      const upcoming = allMatches.filter(m => !m.finished && m.kickoffTime);
+      for (const match of upcoming) {
+        const alreadyTracked = history.predictions.find(
+          p => p.fixtureId === match.id && p.league === leagueId
+        );
+        if (alreadyTracked) continue;
+
+        const prediction = predict({
+          homeTeam:      { id: match.homeTeam.id, name: match.homeTeam.name },
+          awayTeam:      { id: match.awayTeam.id, name: match.awayTeam.name },
+          leagueAvgHome: leagueAvg.home,
+          leagueAvgAway: leagueAvg.away,
+          xGData,
+          formData,
+          h2hData:       [],
+          marketOdds:    null,
+          homeInjuries:  0,
+          awayInjuries:  0,
+          rollingRatings,
+          eloRatings,
+        });
+
+        history.predictions.push({
+          fixtureId:  match.id,
+          league:     leagueId,
+          gameweek:   match.matchday,
+          kickoff:    match.kickoffTime,
+          homeTeam:   match.homeTeam,
+          awayTeam:   match.awayTeam,
+          prediction,
+          trackedAt:  new Date().toISOString(),
+          result:     null,
+        });
+        generated++;
+      }
+    } catch (err) {
+      console.warn(`[PreFill ${leagueId}]`, err.message);
+    }
+  }
+
+  if (generated > 0) {
+    saveHistory(history);
+    console.log(`[PreFill] Generated ${generated} new prediction(s)`);
+  }
+}
+
 // ─── Cron jobs ────────────────────────────────────────────────────────────────
 
 cron.schedule('0 * * * *',    autoFillResults);            // every hour — PL
 cron.schedule('30 * * * *',   autoFillFdResults);          // every hour, staggered — FD leagues
+cron.schedule('45 * * * *',   preFillPredictions);         // every hour — pre-generate all leagues
 cron.schedule('*/15 * * * *', checkKickoffNotifications);  // every 15 min
 cron.schedule('0 8 * * *',    checkSeasonRollover);        // daily at 8am
 
@@ -4210,4 +4363,5 @@ app.listen(PORT, async () => {
   backfillPendingResults();
   autoFillResults();
   autoFillFdResults();
+  preFillPredictions();
 });
