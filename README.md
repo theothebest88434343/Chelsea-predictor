@@ -257,8 +257,8 @@ Supabase stores prediction snapshots and scored results persistently, so the app
 ### Install & run
 
 ```bash
-git clone https://github.com/theothebest88434343/Chelsea-predictor.git
-cd Chelsea-predictor
+git clone https://github.com/theothebest88434343/matchiq.git
+cd matchiq
 npm install
 ```
 
