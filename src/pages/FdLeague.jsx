@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { getLeague } from '../utils/leagues.jsx';
 import { useFavouriteTeam, writeFavouriteTeam } from '../hooks/useFavouriteTeam';
+import { TopScorers, LeagueStats, FormTable } from './FdStats';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -39,12 +40,92 @@ function FormDots({ form }) {
 }
 
 
+// ─── Predicted table ──────────────────────────────────────────────────────────
+
+function PredictedTable({ leagueId, favId }) {
+  const { data: rows, loading, error } = useFetch(`/api/fd/predicted-table?league=${leagueId}`);
+
+  if (loading) return <div className="loading-card"><div className="spinner" /><div>Simulating season…</div></div>;
+  if (error)   return <div className="error-card">Failed to load: {error}</div>;
+  if (!rows?.length) return null;
+
+  const totalTeams = rows.length;
+
+  return (
+    <div className="card" style={{ padding: '12px 4px' }}>
+      <div style={{ padding: '0 8px 10px', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Projected final standings — current points + expected points from remaining fixtures using the prediction model.
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="league-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Team</th>
+              <th style={{ textAlign: 'center' }}>Now</th>
+              <th style={{ textAlign: 'center' }}>Left</th>
+              <th style={{ textAlign: 'center' }}>+xPts</th>
+              <th style={{ textAlign: 'center', color: 'var(--gold)' }}>Proj</th>
+              <th style={{ textAlign: 'center' }}>Chg</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(team => {
+              const isFav  = team.teamId === favId;
+              const change = team.currentPos - team.projectedPosition;
+              return (
+                <tr key={team.teamId} className={isFav ? 'chelsea-row' : ''}>
+                  <td>
+                    <PositionBadge pos={team.projectedPosition} total={totalTeams} />
+                  </td>
+                  <td style={{ fontWeight: isFav ? 700 : 400 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {team.crest && (
+                        <img src={team.crest} alt={team.shortName}
+                          style={{ width: 18, height: 18, objectFit: 'contain', flexShrink: 0 }} />
+                      )}
+                      <span style={{
+                        color: isFav ? 'var(--gold)' : 'var(--text)', fontSize: 13,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 110,
+                      }}>
+                        {team.shortName}
+                      </span>
+                      {isFav && <span style={{ fontSize: 10, color: 'var(--gold)' }}>★</span>}
+                    </div>
+                  </td>
+                  <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{team.points}</td>
+                  <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{team.gamesLeft}</td>
+                  <td style={{ textAlign: 'center', color: 'var(--blue-light)' }}>+{team.xPts.toFixed(1)}</td>
+                  <td style={{ textAlign: 'center', fontWeight: 700, color: isFav ? 'var(--gold)' : 'var(--text)' }}>
+                    {team.projectedPoints.toFixed(1)}
+                  </td>
+                  <td style={{ textAlign: 'center' }}>
+                    {change > 0
+                      ? <span style={{ color: 'var(--green)',      fontSize: 11, fontWeight: 700 }}>▲{change}</span>
+                      : change < 0
+                      ? <span style={{ color: 'var(--red)',        fontSize: 11, fontWeight: 700 }}>▼{Math.abs(change)}</span>
+                      : <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>—</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: '10px 12px 0', fontSize: 11, color: 'var(--text-muted)' }}>
+        Proj = current pts + model expected pts · Chg = vs current position · Data: football-data.org
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FdLeague() {
   const { leagueId } = useParams();
   const league = getLeague(leagueId);
 
+  const [tab,    setTab]    = useState('live');
   const [sortBy, setSortBy] = useState('points');
 
   // Read the current favourite from the shared key so it stays in sync with
@@ -100,15 +181,28 @@ export default function FdLeague() {
     <div>
       <div className="section-title">{league.name} table</div>
 
-      {loading && (
+      <div className="tab-row">
+        <button className={`tab-btn${tab === 'live'      ? ' active' : ''}`} onClick={() => setTab('live')}>Table</button>
+        <button className={`tab-btn${tab === 'predicted' ? ' active' : ''}`} onClick={() => setTab('predicted')}>Predicted</button>
+        <button className={`tab-btn${tab === 'scorers'   ? ' active' : ''}`} onClick={() => setTab('scorers')}>Scorers</button>
+        <button className={`tab-btn${tab === 'stats'     ? ' active' : ''}`} onClick={() => setTab('stats')}>Stats</button>
+        <button className={`tab-btn${tab === 'form'      ? ' active' : ''}`} onClick={() => setTab('form')}>Form</button>
+      </div>
+
+      {tab === 'predicted' && <PredictedTable leagueId={leagueId} favId={favId} />}
+      {tab === 'scorers'   && <TopScorers  leagueId={leagueId} />}
+      {tab === 'stats'     && <LeagueStats leagueId={leagueId} />}
+      {tab === 'form'      && <FormTable   leagueId={leagueId} />}
+
+      {tab === 'live' && loading && (
         <div className="loading-card">
           <div className="spinner" />
           <div>Loading {league.name} table…</div>
         </div>
       )}
-      {error && <div className="error-card">Failed to load standings: {error}</div>}
+      {tab === 'live' && error && <div className="error-card">Failed to load standings: {error}</div>}
 
-      {!loading && !error && rows && (
+      {tab === 'live' && !loading && !error && rows && (
         <div className="card" style={{ padding: '12px 4px' }}>
           {/* Sort controls */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, paddingLeft: 8 }}>

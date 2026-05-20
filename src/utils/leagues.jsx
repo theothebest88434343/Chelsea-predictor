@@ -9,6 +9,9 @@ export const LEAGUES = [
   { id: 'bundesliga',     name: 'Bundesliga',      short: 'BL',  emoji: '🇩🇪',         color: '#d20515', available: true  },
   { id: 'ligue-1',        name: 'Ligue 1',         short: 'L1',  emoji: '🇫🇷',         color: '#091c3e', available: true  },
   { id: 'serie-a',        name: 'Serie A',         short: 'SA',  emoji: '🇮🇹',         color: '#008c45', available: true  },
+  { id: 'brasileirao',    name: 'Brasileirão',     short: 'BSA', emoji: '🇧🇷',         color: '#009c3b', available: true  },
+  { id: 'eredivisie',     name: 'Eredivisie',      short: 'ERE', emoji: '🇳🇱',         color: '#ff6600', available: true  },
+  { id: 'primeira-liga',  name: 'Primeira Liga',   short: 'PRL', emoji: '🇵🇹',         color: '#006600', available: true  },
 ];
 
 export function getLeague(leagueId) {

@@ -187,6 +187,21 @@ function outcomeFromScore(scoreStr) {
   return h > a ? 'H' : h < a ? 'A' : 'D';
 }
 
+function getPredictedOutcome(prediction) {
+  if (!prediction) return null;
+  // Prefer probability-based outcome — bestScore is the matrix argmax which is
+  // often 1-1 even when the model strongly favours a home/away win. Using
+  // probabilities avoids misclassifying all predictions as draws.
+  const { homeWin, draw, awayWin } = prediction;
+  if (homeWin != null && draw != null && awayWin != null) {
+    const max = Math.max(homeWin, draw, awayWin);
+    if (homeWin === max) return 'H';
+    if (awayWin === max) return 'A';
+    return 'D';
+  }
+  return outcomeFromScore(prediction.predictedScore ?? '');
+}
+
 function classifyPrediction(p) {
   if (!p.result) return 'pending';
 
@@ -198,7 +213,7 @@ function classifyPrediction(p) {
 
   if (predScore.replace('–', '-') === `${homeGoals}-${awayGoals}`) return 'exact';
 
-  const predicted = outcomeFromScore(predScore);
+  const predicted = getPredictedOutcome(p.prediction);
   if (predicted === null) return 'wrong';
 
   return predicted === actual ? 'correct' : 'wrong';
@@ -355,8 +370,28 @@ function TrackerHistory({ leagueId }) {
     });
   }
 
-  const currentGW = data?.currentGW ?? null;
-  const activeGW = selectedGW ?? (currentGW && gwMap.has(currentGW) ? currentGW : byGW[0]);
+  const serverGW = data?.currentGW ?? null;
+
+  // Find the gameweek in history whose median kickoff is closest to now.
+  // This works even when the server's currentGW isn't in gwMap yet (no predictions
+  // saved for that week) — we pick the closest week we DO have predictions for.
+  const now = Date.now();
+  let bestGW = byGW[0];
+  let bestDist = Infinity;
+  for (const gw of byGW) {
+    const times = gwMap.get(gw)
+      .map(p => safeDate(p.kickoff)?.getTime())
+      .filter(Boolean);
+    if (!times.length) continue;
+    times.sort((a, b) => a - b);
+    const median = times[Math.floor(times.length / 2)];
+    const dist   = Math.abs(median - now);
+    if (dist < bestDist) { bestDist = dist; bestGW = gw; }
+  }
+
+  // Prefer server's currentGW if it exists in history, otherwise use date-based pick
+  const currentGW = serverGW && gwMap.has(serverGW) ? serverGW : bestGW;
+  const activeGW = selectedGW ?? currentGW;
   const rows = gwMap.get(activeGW) ?? [];
 
   const gwCompleted = rows.filter(p => p.result);
