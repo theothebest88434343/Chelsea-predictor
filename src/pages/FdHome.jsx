@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { format, parseISO } from 'date-fns';
+import { useState, useEffect, useMemo } from 'react';
+import { format, parseISO, isPast } from 'date-fns';
 import { useParams } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
@@ -15,6 +15,54 @@ function Crest({ src, alt, size = 22 }) {
   );
 }
 
+// ─── Countdown timer ──────────────────────────────────────────────────────────
+
+function Countdown({ kickoffTime }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!kickoffTime) return null;
+  const kickoff = new Date(kickoffTime);
+  if (isPast(kickoff)) return null;
+
+  const diff  = kickoff - now;
+  const days  = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const mins  = Math.floor((diff % 3600000)  / 60000);
+  const secs  = Math.floor((diff % 60000)    / 1000);
+
+  return (
+    <div style={{ textAlign: 'center', marginTop: 12 }}>
+      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 6, letterSpacing: 1, fontWeight: 600 }}>
+        KICKOFF IN
+      </div>
+      <div className="countdown">
+        {days > 0 && (
+          <div className="countdown-unit">
+            <span className="countdown-num">{String(days).padStart(2, '0')}</span>
+            <span className="countdown-label">DAYS</span>
+          </div>
+        )}
+        <div className="countdown-unit">
+          <span className="countdown-num">{String(hours).padStart(2, '0')}</span>
+          <span className="countdown-label">HRS</span>
+        </div>
+        <div className="countdown-unit">
+          <span className="countdown-num">{String(mins).padStart(2, '0')}</span>
+          <span className="countdown-label">MIN</span>
+        </div>
+        <div className="countdown-unit">
+          <span className="countdown-num">{String(secs).padStart(2, '0')}</span>
+          <span className="countdown-label">SEC</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Hero card — next fixture ──────────────────────────────────────────────────
 
 function HeroCard({ match, favTeam, prediction }) {
@@ -26,7 +74,7 @@ function HeroCard({ match, favTeam, prediction }) {
     );
   }
 
-  const kicks = match.kickoffTime ? parseISO(match.kickoffTime) : null;
+  const kicks  = match.kickoffTime ? parseISO(match.kickoffTime) : null;
   const isHome = match.homeTeam.id === favTeam.id;
 
   return (
@@ -68,7 +116,7 @@ function HeroCard({ match, favTeam, prediction }) {
                 {prediction.predictedScore?.replace('-', '–') ?? 'VS'}
               </div>
               <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', marginTop: 3, letterSpacing: 0.5 }}>
-                PREDICTED
+                TOP SCORE
               </div>
             </>
           ) : (
@@ -89,6 +137,9 @@ function HeroCard({ match, favTeam, prediction }) {
           </div>
         </div>
       </div>
+
+      {/* Live countdown */}
+      <Countdown kickoffTime={match.kickoffTime} />
     </div>
   );
 }
@@ -134,13 +185,13 @@ function RecentResults({ results, favTeam }) {
       <div className="card-title">Recent results</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {results.map(m => {
-          const isFavHome  = m.homeTeam.id === favTeam.id;
-          const favGoals   = isFavHome ? m.homeGoals : m.awayGoals;
-          const oppGoals   = isFavHome ? m.awayGoals : m.homeGoals;
-          const opp        = isFavHome ? m.awayTeam  : m.homeTeam;
-          const result     = favGoals > oppGoals ? 'W' : favGoals < oppGoals ? 'L' : 'D';
-          const color      = result === 'W' ? 'var(--green)' : result === 'L' ? 'var(--red)' : 'var(--draw)';
-          const kicks      = m.kickoffTime ? parseISO(m.kickoffTime) : null;
+          const isFavHome = m.homeTeam.id === favTeam.id;
+          const favGoals  = isFavHome ? m.homeGoals : m.awayGoals;
+          const oppGoals  = isFavHome ? m.awayGoals : m.homeGoals;
+          const opp       = isFavHome ? m.awayTeam  : m.homeTeam;
+          const result    = favGoals > oppGoals ? 'W' : favGoals < oppGoals ? 'L' : 'D';
+          const color     = result === 'W' ? 'var(--green)' : result === 'L' ? 'var(--red)' : 'var(--draw)';
+          const kicks     = m.kickoffTime ? parseISO(m.kickoffTime) : null;
 
           return (
             <div key={m.id} style={{
@@ -178,6 +229,162 @@ function RecentResults({ results, favTeam }) {
   );
 }
 
+// ─── Off-season card ───────────────────────────────────────────────────────────
+
+function OffSeasonCard({ standings, standingsRow, recentResults, favTeam, league, scorers }) {
+  const champion  = standings?.[0] ?? null;
+  const topScorer = scorers?.[0]   ?? null;
+
+  // Derived final stats for user's team
+  const isFavChampion = standingsRow && champion && standingsRow.teamId === champion.teamId;
+
+  return (
+    <div>
+      {/* ── Hero banner ────────────────────────────────────────────────────── */}
+      <div className="hero-card" style={{ textAlign: 'center', marginBottom: 12 }}>
+        <div style={{ fontSize: 44, marginBottom: 8 }}>🏆</div>
+        <div style={{
+          fontFamily: 'Bebas Neue, sans-serif', fontSize: 22,
+          letterSpacing: 2, color: 'rgba(255,255,255,0.9)',
+        }}>
+          Season Complete
+        </div>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 3, letterSpacing: 1 }}>
+          {league.name} · Final standings
+        </div>
+
+        {/* Champion */}
+        {champion && (
+          <div style={{ marginTop: 20 }}>
+            {champion.crest && (
+              <img
+                src={champion.crest}
+                alt={champion.shortName}
+                style={{ width: 60, height: 60, objectFit: 'contain', marginBottom: 8 }}
+              />
+            )}
+            <div style={{
+              fontFamily: 'Bebas Neue, sans-serif', fontSize: 22,
+              color: 'var(--gold)', letterSpacing: 1,
+            }}>
+              {champion.shortName}
+            </div>
+            <div style={{
+              display: 'inline-block', marginTop: 4,
+              padding: '2px 10px', borderRadius: 4,
+              background: 'rgba(219,161,17,0.2)', border: '1px solid rgba(219,161,17,0.4)',
+              fontSize: 10, fontWeight: 700, letterSpacing: 1.5, color: 'var(--gold)',
+            }}>
+              CHAMPIONS · {champion.points} PTS
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Your team's final position (if not champion) ────────────────────── */}
+      {standingsRow && !isFavChampion && (
+        <div className="card">
+          <div className="card-title">Your team · Final position</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {standingsRow.crest && (
+                <img src={standingsRow.crest} alt={standingsRow.shortName}
+                  style={{ width: 32, height: 32, objectFit: 'contain' }} />
+              )}
+              <div>
+                <div style={{ fontWeight: 700 }}>{standingsRow.shortName}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  {standingsRow.won}W {standingsRow.drawn}D {standingsRow.lost}L
+                  &nbsp;·&nbsp; GD {standingsRow.gd >= 0 ? '+' : ''}{standingsRow.gd}
+                </div>
+              </div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{
+                fontFamily: 'Bebas Neue, sans-serif', fontSize: 36,
+                color: 'var(--gold)', lineHeight: 1,
+              }}>
+                {standingsRow.position}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: 0.5 }}>
+                FINAL POS
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginTop: 2 }}>
+                {standingsRow.points} pts
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Top scorer ─────────────────────────────────────────────────────── */}
+      {topScorer && (
+        <div className="card">
+          <div className="card-title">Top scorer</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {topScorer.team.crest && (
+                <img src={topScorer.team.crest} alt={topScorer.team.shortName}
+                  style={{ width: 28, height: 28, objectFit: 'contain' }} />
+              )}
+              <div>
+                <div style={{ fontWeight: 700 }}>{topScorer.player.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                  {topScorer.team.shortName}
+                  {topScorer.assists > 0 && ` · ${topScorer.assists} assists`}
+                </div>
+              </div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{
+                fontFamily: 'Bebas Neue, sans-serif', fontSize: 36,
+                color: 'var(--gold)', lineHeight: 1,
+              }}>
+                {topScorer.goals}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: 0.5 }}>
+                GOALS
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Final season stats for user's team ─────────────────────────────── */}
+      {standingsRow && (
+        <div className="card">
+          <div className="card-title">
+            {isFavChampion ? '🏆 Champions · Season stats' : 'Season stats'}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, textAlign: 'center' }}>
+            {[
+              { label: 'Points',  value: standingsRow.points },
+              { label: 'W-D-L',   value: `${standingsRow.won}-${standingsRow.drawn}-${standingsRow.lost}` },
+              { label: 'GD',      value: (standingsRow.gd >= 0 ? '+' : '') + standingsRow.gd },
+              { label: 'Played',  value: standingsRow.played },
+            ].map(item => (
+              <div key={item.label} style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 4px' }}>
+                <div style={{
+                  fontSize: 20, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif',
+                  color: 'var(--gold)', letterSpacing: 1,
+                }}>
+                  {item.value}
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, marginTop: 2, letterSpacing: 0.5 }}>
+                  {item.label}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Last 5 results as season recap ─────────────────────────────────── */}
+      <RecentResults results={recentResults} favTeam={favTeam} />
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FdHome() {
@@ -185,8 +392,7 @@ export default function FdHome() {
   const league  = getLeague(leagueId);
   const favTeam = useFavouriteTeam();
 
-  // All matches (cached — also used by Round page) gives us enough data to
-  // find the team's next fixture and last 5 results without extra endpoints.
+  // All matches (cached) — gives us enough data to find next fixture + last 5 results
   const { data: allMatches, loading: mLoading, error: mError } = useFetch(
     `/api/fd/matches?league=${leagueId}`
   );
@@ -210,13 +416,7 @@ export default function FdHome() {
     [teamMatches]
   );
 
-  // Prediction for the hero card — fetched lazily once nextFixture is known
-  const { data: heroPredData } = useFetch(
-    nextFixture ? `/api/fd/predictions?league=${leagueId}&fixtureId=${nextFixture.id}` : null
-  );
-  const heroPred = heroPredData?.prediction ?? null;
-
-  // Last 5 finished results (matches are sorted oldest→newest by matchday; reverse for recency)
+  // Last 5 finished results (matches are sorted oldest→newest; reverse for recency)
   const recentResults = useMemo(
     () => [...teamMatches].filter(m => m.finished).reverse().slice(0, 5),
     [teamMatches]
@@ -228,11 +428,25 @@ export default function FdHome() {
     return standings.find(r => r.teamId === favTeam.id) ?? null;
   }, [standings, favTeam?.id]);
 
+  // Off-season: all team matches loaded and finished, none upcoming
+  const isOffSeason = !loading && teamMatches.length > 0 && !nextFixture;
+
+  // Prediction for the hero card — fetched lazily once nextFixture is known
+  const { data: heroPredData } = useFetch(
+    nextFixture ? `/api/fd/predictions?league=${leagueId}&fixtureId=${nextFixture.id}` : null
+  );
+  const heroPred = heroPredData?.prediction ?? null;
+
+  // Top scorers — fetched only during off-season
+  const { data: scorers } = useFetch(
+    isOffSeason ? `/api/fd/scorers?league=${leagueId}` : null
+  );
+
   if (loading) {
     return (
       <div className="loading-card">
         <div className="spinner" />
-        <div>Loading {favTeam.name ?? league.name} data…</div>
+        <div>Loading {favTeam?.name ?? league.name} data…</div>
       </div>
     );
   }
@@ -241,8 +455,7 @@ export default function FdHome() {
     return <div className="error-card">Failed to load data: {mError}</div>;
   }
 
-  // If we can't match any matches to this team (e.g. team from a different
-  // league stored in localStorage), show a helpful nudge.
+  // Team from a different league stored in localStorage
   if (!loading && teamMatches.length === 0) {
     return (
       <div className="card" style={{ textAlign: 'center', padding: 32 }}>
@@ -253,6 +466,20 @@ export default function FdHome() {
           Switch league or pick a new team.
         </div>
       </div>
+    );
+  }
+
+  // Off-season view
+  if (isOffSeason) {
+    return (
+      <OffSeasonCard
+        standings={standings}
+        standingsRow={standingsRow}
+        recentResults={recentResults}
+        favTeam={favTeam}
+        league={league}
+        scorers={scorers}
+      />
     );
   }
 

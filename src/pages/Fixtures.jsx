@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { format } from 'date-fns';
 import { useParams } from 'react-router-dom';
-import { ChevronDown, ChevronUp, BarChart2, Zap, Activity, Users } from 'lucide-react';
+import { ChevronDown, ChevronUp, BarChart2, Zap, Activity, Users, Lightbulb } from 'lucide-react';
 import { useFetch } from '../hooks/useFetch';
 import { usePrediction } from '../hooks/usePredictions';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
@@ -49,6 +49,133 @@ function WeatherWrapper({ fixtureId }) {
   return (
     <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
       <WeatherPanel data={data} />
+    </div>
+  );
+}
+
+// ─── Why this prediction ──────────────────────────────────────────────────────
+
+function WhyPrediction({ pred, homeTeam, awayTeam }) {
+  if (!pred?.lambdas) return null;
+
+  const { home: lH, away: lA }                          = pred.lambdas;
+  const { hAtk = 1, hDef = 1, aAtk = 1, aDef = 1 }    = pred.strengths ?? {};
+  const { homeWin = 0, draw = 0, awayWin = 0 }          = pred;
+
+  const factors = [];
+
+  // 1. Favourite / market leader
+  const maxProb = Math.max(homeWin, draw, awayWin);
+  if (homeWin === maxProb) {
+    const label = maxProb >= 0.55 ? 'clear favourite' : 'slight favourite';
+    factors.push(
+      `${homeTeam.shortName} are the ${label} at ${Math.round(homeWin * 100)}% — ` +
+      `home advantage and model ratings both lean their way.`
+    );
+  } else if (awayWin === maxProb) {
+    const label = maxProb >= 0.55 ? 'clear favourite' : 'slight favourite';
+    factors.push(
+      `${awayTeam.shortName} are the ${label} at ${Math.round(awayWin * 100)}% — ` +
+      `they carry a stronger expected-goal profile despite playing away.`
+    );
+  } else {
+    factors.push(
+      `This is a closely-contested match — a draw is the most likely single outcome ` +
+      `at ${Math.round(draw * 100)}%, with both sides evenly matched.`
+    );
+  }
+
+  // 2. Expected goals edge
+  const lDiff = ((lH - lA) / Math.max(lA, 0.1) * 100).toFixed(0);
+  if (lH > lA * 1.12) {
+    factors.push(
+      `${homeTeam.shortName} are expected to create ${Math.abs(lDiff)}% more ` +
+      `chances (λ ${lH.toFixed(2)} vs ${lA.toFixed(2)}), reflecting their ` +
+      `home-field edge and recent xG form.`
+    );
+  } else if (lA > lH * 1.12) {
+    factors.push(
+      `${awayTeam.shortName} have a ${Math.abs(lDiff)}% expected-goal advantage ` +
+      `(λ ${lA.toFixed(2)} vs ${lH.toFixed(2)}) — they are outperforming their hosts ` +
+      `on recent xG metrics.`
+    );
+  } else {
+    factors.push(
+      `Both teams are closely matched on expected goals ` +
+      `(${homeTeam.shortName} λ ${lH.toFixed(2)} · ${awayTeam.shortName} λ ${lA.toFixed(2)}), ` +
+      `making the outcome hard to call.`
+    );
+  }
+
+  // 3. Attack vs defence matchup
+  if (hAtk > aAtk * 1.15 && aDef > hDef * 1.08) {
+    factors.push(
+      `${homeTeam.shortName}'s attack (${hAtk.toFixed(2)}×) faces a ` +
+      `leaky ${awayTeam.shortName} defence (${aDef.toFixed(2)}×) — ` +
+      `conditions for a goal-rich home performance.`
+    );
+  } else if (aAtk > hAtk * 1.15 && hDef > aDef * 1.08) {
+    factors.push(
+      `${awayTeam.shortName}'s attack (${aAtk.toFixed(2)}×) is up against ` +
+      `a vulnerable ${homeTeam.shortName} defence (${hDef.toFixed(2)}×) — ` +
+      `expect the visitors to test the home backline.`
+    );
+  } else if (hDef < aDef * 0.88) {
+    factors.push(
+      `${homeTeam.shortName} have the stronger defensive record ` +
+      `(${hDef.toFixed(2)}× conceded rate vs ${awayTeam.shortName}'s ${aDef.toFixed(2)}×), ` +
+      `which limits the away team's scoring chances.`
+    );
+  } else if (aDef < hDef * 0.88) {
+    factors.push(
+      `${awayTeam.shortName}'s defence is the standout factor ` +
+      `(${aDef.toFixed(2)}× conceded rate vs ${homeTeam.shortName}'s ${hDef.toFixed(2)}×), ` +
+      `capping how many the home side can score.`
+    );
+  }
+
+  // 4. Match tempo — total goals projection
+  const totalGoals = lH + lA;
+  if (totalGoals >= 3.0) {
+    factors.push(
+      `An open, free-scoring match is projected — the model expects ` +
+      `${totalGoals.toFixed(1)} total goals between the two sides.`
+    );
+  } else if (totalGoals <= 1.9) {
+    factors.push(
+      `A tight, low-scoring affair is expected — only ` +
+      `${totalGoals.toFixed(1)} combined goals projected, suggesting strong ` +
+      `defensive displays from both teams.`
+    );
+  }
+
+  const topFactors = factors.slice(0, 4);
+
+  return (
+    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+        <Lightbulb size={13} color="var(--gold)" />
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>
+          WHY THIS PREDICTION
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {topFactors.map((factor, i) => (
+          <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <div style={{
+              width: 20, height: 20, borderRadius: '50%',
+              background: 'rgba(219,161,17,0.15)', border: '1px solid rgba(219,161,17,0.35)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 10, fontWeight: 700, color: 'var(--gold)', flexShrink: 0, marginTop: 1,
+            }}>
+              {i + 1}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text)' }}>
+              {factor}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -142,7 +269,7 @@ function FixtureRow({ fixture, selectedTeamId, favTeam }) {
                 <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, letterSpacing: 3, color: 'var(--text)', lineHeight: 1 }}>
                   {pred.predictedScore?.replace('-', '–') ?? '?–?'}
                 </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>predicted</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>top score</div>
               </>
             ) : (
               <div style={{ color: 'var(--text-muted)', fontFamily: 'Bebas Neue, sans-serif', fontSize: 20 }}>vs</div>
@@ -201,6 +328,10 @@ function FixtureRow({ fixture, selectedTeamId, favTeam }) {
                 awayTeam={fixture.awayTeam}
               />
             </div>
+          )}
+
+          {pred?.lambdas && (
+            <WhyPrediction pred={pred} homeTeam={fixture.homeTeam} awayTeam={fixture.awayTeam} />
           )}
 
           {pred?.matrix && (

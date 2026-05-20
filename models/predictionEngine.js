@@ -8,10 +8,25 @@ const SIMULATIONS       = 10_000;
 // Defensive matches (low λ) have stronger correlation → RHO toward −0.18.
 // τ applies only to 0-0, 1-0, 0-1, 1-1 cells — all other scores unaffected.
 const RHO_REF    = -0.11;  // reference RHO at typical geometric-mean lambda
-const RHO_MIN    = -0.18;  // strongest correction — very defensive matches
+const RHO_MIN    = -0.18;  // strongest base correction — very defensive matches
 const RHO_MAX    = -0.05;  // weakest correction — high-scoring matches
 const REF_LAMBDA =  1.34;  // sqrt(leagueAvgHome * leagueAvgAway) at default averages
 const RHO_SLOPE  =  0.075; // RHO shift per unit of geometric-mean lambda
+// Draw-fix Part 1: close-match RHO boost.
+// When |λH − λA| < DRAW_CLOSE_THRESHOLD, push RHO further negative to inflate
+// 0-0 and 1-1 cells. At diff=0 this adds RHO_DRAW_EXTRA (−0.09) on top of the
+// base, pushing the effective RHO toward RHO_DRAW_MIN (−0.20). Scales linearly
+// to zero at the threshold so there is no discontinuity.
+const RHO_DRAW_EXTRA      = -0.09;  // max additional correction at identical lambdas
+const RHO_DRAW_MIN        = -0.20;  // hard floor including the close-match boost
+const DRAW_CLOSE_THRESHOLD = 0.30;  // |λH − λA| below this triggers RHO boost
+// Draw-fix Part 2 (market blend boost): when |λH − λA| < DRAW_CLOSE_MARKET_THRESHOLD
+// the market odds blend weight is raised from MARKET_BLEND to MARKET_BLEND_CLOSE.
+// Bookmaker draw prices are the strongest single draw-specific signal available and
+// are already well-calibrated; giving them more weight for tight matches lets the
+// odds pull draw probability up naturally without mechanical redistribution.
+const MARKET_BLEND_CLOSE         = 0.65;  // 65% model / 35% market for close matches
+const DRAW_CLOSE_MARKET_THRESHOLD = 0.25;  // |λH − λA| below this raises market weight
 const FORM_WEIGHTS      = [0.30, 0.24, 0.20, 0.16, 0.10]; // recency-weighted, smooth tail
 const STREAK_WEIGHTS    = [0.35, 0.25, 0.20, 0.12, 0.08]; // most-recent first — steeper than FORM_WEIGHTS
 const STREAK_CAP        = 0.18;  // ±18% max swing from pure W/D/L streak signal
@@ -70,10 +85,22 @@ function tau(h, a, lH, lA, rho) {
 }
 
 // Dynamic RHO: higher geometric-mean lambda → less low-score correlation → weaker correction.
-// At λ_geo = REF_LAMBDA (≈1.34) this returns RHO_REF (−0.11), preserving prior calibration.
+// At λ_geo = REF_LAMBDA (≈1.34) with identical lambdas this returns RHO_REF (−0.11).
+// Extra close-match boost: when |λH − λA| < DRAW_CLOSE_THRESHOLD, adds RHO_DRAW_EXTRA
+// (scaled by closeness) to increase 0-0 and 1-1 probability for evenly matched teams.
 function dynamicRho(lH, lA) {
   const geoMean = Math.sqrt(lH * lA);
-  return clamp(RHO_REF + RHO_SLOPE * (geoMean - REF_LAMBDA), RHO_MIN, RHO_MAX);
+  let rho = RHO_REF + RHO_SLOPE * (geoMean - REF_LAMBDA);
+
+  // Close-match boost — inflates low-score draw cells when teams are evenly matched
+  const lambdaDiff = Math.abs(lH - lA);
+  if (lambdaDiff < DRAW_CLOSE_THRESHOLD) {
+    const closeness = 1 - lambdaDiff / DRAW_CLOSE_THRESHOLD; // 1 at diff=0, 0 at threshold
+    rho += RHO_DRAW_EXTRA * closeness;
+  }
+
+  // RHO_DRAW_MIN (−0.20) extends the floor beyond the base RHO_MIN (−0.18)
+  return clamp(rho, RHO_DRAW_MIN, RHO_MAX);
 }
 
 // ─── Score matrix (Poisson + Dixon-Coles τ with dynamic RHO) ─────────────────
@@ -571,19 +598,24 @@ function buildCalibration(history, bins = 8) {
 }
 
 // ─── Market blending ──────────────────────────────────────────────────────────
+// modelWeight: fraction kept for the Poisson model (1 − modelWeight goes to market).
+// Default is MARKET_BLEND (0.75). predict() passes MARKET_BLEND_CLOSE (0.65) when
+// |λH − λA| < DRAW_CLOSE_MARKET_THRESHOLD — giving bookmakers 35% say on tight
+// matches where their draw prices are the strongest available draw signal.
 
-function blendMarket(model, marketOdds) {
+function blendMarket(model, marketOdds, modelWeight = MARKET_BLEND) {
   if (!marketOdds?.home || !marketOdds?.draw || !marketOdds?.away) return model;
 
   const mH = 1 / marketOdds.home;
   const mD = 1 / marketOdds.draw;
   const mA = 1 / marketOdds.away;
   const mt = mH + mD + mA;
+  const mktWeight = 1 - modelWeight;
 
   return {
-    hWin: MARKET_BLEND * model.hWin + (1 - MARKET_BLEND) * (mH / mt),
-    draw: MARKET_BLEND * model.draw + (1 - MARKET_BLEND) * (mD / mt),
-    aWin: MARKET_BLEND * model.aWin + (1 - MARKET_BLEND) * (mA / mt),
+    hWin: modelWeight * model.hWin + mktWeight * (mH / mt),
+    draw: modelWeight * model.draw + mktWeight * (mD / mt),
+    aWin: modelWeight * model.aWin + mktWeight * (mA / mt),
   };
 }
 
@@ -651,19 +683,26 @@ function predict(params) {
   // runMonteCarlo() is retained below as a diagnostic utility only.
   let probs = { hWin: mHW, draw: mD, aWin: mAW };
 
-  // Blend market odds (before calibration — market is already reasonably calibrated)
-  probs = blendMarket(probs, params.marketOdds);
+  // Blend market odds (before calibration — market is already reasonably calibrated).
+  // For close matches (|λH − λA| < DRAW_CLOSE_MARKET_THRESHOLD) raise the market
+  // weight from 25% to 35%: bookmaker draw prices are the strongest draw-specific
+  // signal and are already well-calibrated, so deferring to them more on tight
+  // fixtures improves draw detection without the accuracy cost of redistribution.
+  const lambdaDiff   = Math.abs(homeLambda - awayLambda);
+  const marketWeight = lambdaDiff < DRAW_CLOSE_MARKET_THRESHOLD
+    ? MARKET_BLEND_CLOSE
+    : MARKET_BLEND;
+  probs = blendMarket(probs, params.marketOdds, marketWeight);
 
   // Post-model isotonic calibration (final step — corrects structural overconfidence)
   probs = calibrate(probs.hWin, probs.draw, probs.aWin);
 
   const confidence = Math.max(probs.hWin, probs.draw, probs.aWin);
 
-  // predictedScore: round(λH)-round(λA) — the expected-goals score, rounded to nearest integer.
-  // This is more informative than the modal score (argmax of the joint distribution), which
-  // collapses to 1-1 for virtually all typical PL matches (λH≈1.4-1.8, λA≈1.0-1.4) regardless
-  // of team strength. round(λ) gives a score that actually varies with the predicted lambdas.
-  const predictedScore = `${Math.round(homeLambda)}-${Math.round(awayLambda)}`;
+  // predictedScore: the modal score (argmax of the joint PMF) — the single scoreline with the
+  // highest probability. This is what the score matrix highlights, so the header and matrix
+  // are always consistent. The win-probability bar separately shows who is likely to win.
+  const predictedScore = bestScore;
 
   return {
     homeWin:        probs.hWin,

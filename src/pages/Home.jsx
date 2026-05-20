@@ -164,7 +164,7 @@ export default function Home() {
                   <div className="hero-score" style={{ fontSize: 36 }}>
                     {prediction.prediction?.predictedScore?.replace('-', '–') ?? '?–?'}
                   </div>
-                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>predicted</div>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>top score</div>
                 </>
               ) : (
                 <div className="hero-vs">VS</div>

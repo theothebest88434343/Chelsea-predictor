@@ -166,6 +166,9 @@ export default function FdLeague() {
                           }}>
                             {team.shortName}
                           </span>
+                          {team.position === 1 && sortBy === 'points' && (
+                            <span style={{ fontSize: 12 }} title="League champions">🏆</span>
+                          )}
                           {isFav && <span style={{ fontSize: 10, color: 'var(--gold)' }}>★</span>}
                         </div>
                       </td>
