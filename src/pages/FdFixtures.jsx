@@ -405,20 +405,14 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
               <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, letterSpacing: 3, color: 'var(--text)', lineHeight: 1 }}>
                 {match.homeGoals} – {match.awayGoals}
               </div>
-            ) : pred ? (() => {
-              const max = Math.max(pred.homeWin ?? 0, pred.draw ?? 0, pred.awayWin ?? 0);
-              const outcomeLabel = pred.homeWin === max ? 'Home Win' : pred.awayWin === max ? 'Away Win' : 'Draw';
-              const outcomeColor = pred.homeWin === max ? 'var(--blue-light)' : pred.awayWin === max ? 'var(--gold)' : 'var(--text-muted)';
-              return (
-                <>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: outcomeColor, letterSpacing: 0.3, lineHeight: 1 }}>{outcomeLabel}</div>
-                  <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: 2, color: 'var(--text-muted)', lineHeight: 1.1, marginTop: 2 }}>
-                    {pred.predictedScore?.replace('-', '–') ?? '?–?'}
-                  </div>
-                  <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1, opacity: 0.6 }}>top score</div>
-                </>
-              );
-            })() : (
+            ) : pred ? (
+              <>
+                <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, letterSpacing: 3, color: 'var(--text)', lineHeight: 1 }}>
+                  {pred.predictedScore?.replace('-', '–') ?? '?–?'}
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>top score</div>
+              </>
+            ) : (
               <div style={{ color: 'var(--text-muted)', fontFamily: 'Bebas Neue, sans-serif', fontSize: 20 }}>vs</div>
             )}
           </div>
