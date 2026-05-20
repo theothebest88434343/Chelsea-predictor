@@ -9,7 +9,7 @@
 
 **MatchIQ** is a full-stack football analytics and prediction platform. Pick any team across six of Europe's top leagues, get statistically-grounded match predictions before every game, track how accurate those predictions were, and run a simulated betting portfolio — all in a clean mobile-first UI.
 
-> 🔗 **Live demo:** [matchiq.up.railway.app](https://matchiq.up.railway.app)
+> **Live demo:** [matchiq-lyve.onrender.com](https://matchiq-lyve.onrender.com)
 
 ---
 
@@ -27,10 +27,10 @@
 
 ## Features
 
-### 🌍 Six Leagues
+### Six Leagues
 Premier League, La Liga, Bundesliga, Serie A, Ligue 1, and a World Cup / tournament mode. Each league has its own home dashboard, fixtures list, standings table, and team stats page.
 
-### 📊 Match Predictions
+### Match Predictions
 Every upcoming fixture gets a full prediction breakdown:
 - **Predicted scoreline** — the single most probable score from the joint PMF
 - **Win / draw / loss probabilities** — blended model + live market odds
@@ -38,25 +38,25 @@ Every upcoming fixture gets a full prediction breakdown:
 - **Confidence badge** — calibrated signal strength (Low / Medium / High)
 - **Why this prediction** — plain-English explanation of the key factors driving the model output (xG edge, attack vs defence matchup, total goals projection)
 
-### 🧠 Score Matrix
+### Score Matrix
 A 6×6 heatmap of every scoreline from 0–0 to 5–5, with each cell shaded by probability. The modal cell (top score) is highlighted. Makes it easy to see whether a 1–0 or 2–1 is genuinely more likely, and how fat the tail risk is.
 
-### 📈 Season Stats
+### Season Stats
 Rolling form, season totals (W/D/L, GF/GA, points), and historical prediction accuracy for your team — stored persistently in Supabase.
 
-### 💰 Betting Simulator
+### Betting Simulator
 A paper-trading portfolio that places virtual bets on model predictions and tracks P&L over the season. Lets you stress-test a staking strategy without real money.
 
-### 🏆 World Cup / Tournament Mode
+### World Cup / Tournament Mode
 Round-by-round predictions for international tournaments, with group stage standings and knockout bracket simulations via Monte Carlo.
 
-### 📴 Off-Season Mode
+### Off-Season Mode
 When a league season ends, the team home page automatically switches to an off-season summary card: champion, top scorer, the user's team final position, season stats, and last 5 results — so the app always has something useful to show.
 
-### 🔔 Push Notifications
+### Push Notifications
 Web-push alerts (VAPID) for upcoming fixtures and prediction results.
 
-### ⚡ Live Countdown
+### Live Countdown
 Seconds-accurate countdown to every kickoff, live on the hero card.
 
 ---
@@ -317,4 +317,4 @@ MIT — do what you want, attribution appreciated.
 
 ---
 
-<p align="center">Built with ⚽ and too much Dixon-Coles literature</p>
+<p align="center">Built with too much Dixon-Coles literature</p>
