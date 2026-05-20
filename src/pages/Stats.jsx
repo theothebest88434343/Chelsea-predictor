@@ -263,6 +263,13 @@ function PredictionRow({ p }) {
   const predScore   = p.prediction?.predictedScore?.replace('-', '–') ?? '?–?';
   const actualScore = p.result ? `${p.result.homeGoals}–${p.result.awayGoals}` : null;
 
+  // Outcome label derived from probabilities (not score string)
+  const predOutcome = getPredictedOutcome(p.prediction);
+  const OUTCOME_LABEL = { H: 'Home Win', D: 'Draw', A: 'Away Win' };
+  const OUTCOME_COLOR = { H: 'var(--blue-light)', D: 'var(--text-muted)', A: 'var(--gold)' };
+  const outcomeLabel = predOutcome ? OUTCOME_LABEL[predOutcome] : null;
+  const outcomeColor = predOutcome ? OUTCOME_COLOR[predOutcome] : 'var(--text-muted)';
+
   return (
     <div style={{
       background: 'var(--surface2)',
@@ -303,6 +310,9 @@ function PredictionRow({ p }) {
             <div style={{ textAlign: 'center', flex: 1 }}>
               <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2 }}>Predicted</div>
               <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, letterSpacing: 1, color: 'var(--text-muted)' }}>{predScore}</div>
+              {outcomeLabel && (
+                <div style={{ fontSize: 9, fontWeight: 700, color: outcomeColor, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 2 }}>{outcomeLabel}</div>
+              )}
             </div>
             <span style={{ fontSize: 16, color: 'var(--text-muted)', opacity: 0.35, flexShrink: 0 }}>→</span>
             <div style={{ textAlign: 'center', flex: 1 }}>
@@ -314,6 +324,9 @@ function PredictionRow({ p }) {
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2 }}>Predicted</div>
             <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 1, color: 'var(--text-muted)' }}>{predScore}</div>
+            {outcomeLabel && (
+              <div style={{ fontSize: 9, fontWeight: 700, color: outcomeColor, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 2 }}>{outcomeLabel}</div>
+            )}
           </div>
         )}
       </div>
