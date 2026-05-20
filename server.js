@@ -2635,6 +2635,21 @@ const FIFA_STRENGTH = {
 };
 
 function wcStrength(name) {
+  // Prefer live ELO built from martj42 results; fall back to hardcoded FIFA ratings
+  if (_dynamicElo) {
+    // Direct match (martj42 spelling)
+    const alias = toMartj42(name);
+    if (_dynamicElo[alias] != null) return _dynamicElo[alias];
+    if (_dynamicElo[name]  != null) return _dynamicElo[name];
+    // Fuzzy match
+    const key = Object.keys(_dynamicElo).find(k =>
+      k.toLowerCase() === name.toLowerCase() ||
+      name.toLowerCase().includes(k.toLowerCase()) ||
+      k.toLowerCase().includes(name.toLowerCase())
+    );
+    if (key) return _dynamicElo[key];
+  }
+  // Hardcoded fallback
   if (FIFA_STRENGTH[name]) return FIFA_STRENGTH[name];
   const key = Object.keys(FIFA_STRENGTH).find(k =>
     k.toLowerCase() === name.toLowerCase() ||
@@ -3166,15 +3181,18 @@ async function getIntlResults() {
       const i3 = line.indexOf(',', i2 + 1);
       const i4 = line.indexOf(',', i3 + 1);
       const i5 = line.indexOf(',', i4 + 1);
+      const i6 = line.indexOf(',', i5 + 1);
       if (i4 === -1) return null;
       const homeScore = parseInt(line.slice(i3 + 1, i4), 10);
       const awayScore = parseInt(line.slice(i4 + 1, i5 === -1 ? undefined : i5), 10);
       if (isNaN(homeScore) || isNaN(awayScore)) return null;
+      // tournament column sits between i5 and i6
+      const tournament = i5 !== -1 ? line.slice(i5 + 1, i6 === -1 ? undefined : i6).replace(/^"|"$/g, '').trim() : '';
       return {
         date: line.slice(0, i1),
         home: line.slice(i1 + 1, i2),
         away: line.slice(i2 + 1, i3),
-        homeScore, awayScore,
+        homeScore, awayScore, tournament,
       };
     }).filter(Boolean);
     _intlResultsCache   = parsed;
@@ -3184,6 +3202,68 @@ async function getIntlResults() {
   } catch (err) {
     console.warn('[IntlResults] Fetch failed:', err.message);
     return _intlResultsCache ?? [];
+  }
+}
+
+// ─── Dynamic ELO from martj42 results ────────────────────────────────────────
+// Replaces hardcoded FIFA_STRENGTH with ratings computed from actual results.
+// K-factor weighted by tournament importance. Cached for 24h.
+
+let _dynamicElo = null; // populated at startup
+
+function kFactor(tournament = '') {
+  const t = tournament.toLowerCase();
+  if (t.includes('world cup') && !t.includes('qualif')) return 60;
+  if (t.includes('copa america') || t.includes('gold cup') ||
+      t.includes('africa cup') || t.includes('african cup') ||
+      t.includes('asian cup') || t.includes('uefa nations league')) return 50;
+  if (t.includes('qualif') || t.includes('qualifier') ||
+      t.includes('nations league') || t.includes('concacaf nations')) return 40;
+  if (t.includes('friendly') || t.includes('friendlies')) return 20;
+  return 35;
+}
+
+function buildDynamicElo(results) {
+  // Only use matches from 2018 onwards so ratings reflect modern teams,
+  // not squads from a decade ago. All 48 WC nations will have played since then.
+  const START = '2018-01-01';
+  const ratings = {};
+
+  const recent = results
+    .filter(r => r.date >= START)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  for (const { home, away, homeScore, awayScore, tournament } of recent) {
+    if (!ratings[home]) ratings[home] = 1500;
+    if (!ratings[away]) ratings[away] = 1500;
+
+    const rH = ratings[home];
+    const rA = ratings[away];
+    const expH = 1 / (1 + Math.pow(10, (rA - rH) / 400));
+    const K = kFactor(tournament);
+
+    let actH;
+    if (homeScore > awayScore) actH = 1;
+    else if (homeScore < awayScore) actH = 0;
+    else actH = 0.5;
+
+    ratings[home] = rH + K * (actH - expH);
+    ratings[away] = rA + K * ((1 - actH) - (1 - expH));
+  }
+
+  return ratings;
+}
+
+async function initDynamicElo() {
+  try {
+    const results = await getIntlResults();
+    _dynamicElo = buildDynamicElo(results);
+    const top5 = Object.entries(_dynamicElo)
+      .sort((a, b) => b[1] - a[1]).slice(0, 5)
+      .map(([t, r]) => `${t} ${Math.round(r)}`).join(', ');
+    console.log(`[DynamicElo] Built from ${results.length} intl results. Top 5: ${top5}`);
+  } catch (err) {
+    console.warn('[DynamicElo] Init failed, falling back to hardcoded:', err.message);
   }
 }
 
@@ -4468,6 +4548,7 @@ cron.schedule('30 * * * *',   autoFillFdResults);          // every hour, stagge
 cron.schedule('45 * * * *',   preFillPredictions);         // every hour — pre-generate all leagues
 cron.schedule('*/15 * * * *', checkKickoffNotifications);  // every 15 min
 cron.schedule('0 8 * * *',    checkSeasonRollover);        // daily at 8am
+cron.schedule('0 6 * * *',    initDynamicElo);              // daily at 6am — refresh WC ELO from martj42
 
 // ─── Production static + SPA fallback ────────────────────────────────────────
 
@@ -4496,6 +4577,9 @@ app.listen(PORT, async () => {
 
   // Load persistent data from Supabase (or fall back to local files)
   history = await loadHistory();
+
+  // Build dynamic ELO from international results before freezing WC predictions
+  await initDynamicElo();
   await initWcPrePredictions();
 
   checkSeasonRollover();
