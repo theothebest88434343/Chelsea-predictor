@@ -403,6 +403,188 @@ const UNDERSTAT_NAME_MAP = {
   'Bournemouth':          'Bournemouth',
 };
 
+// ─── Understat xG — non-PL leagues ───────────────────────────────────────────
+// Maps leagueId → Understat league slug (used in the API URL)
+const UNDERSTAT_LEAGUE_SLUG = {
+  'la-liga':    'La_liga',
+  'bundesliga': 'Bundesliga',
+  'ligue-1':    'Ligue_1',
+  'serie-a':    'Serie_A',
+};
+
+// Maps FD full team name → Understat team title for each league.
+// Only entries that differ are listed; identical names fall through to direct lookup.
+const FD_TO_UNDERSTAT_NAME = {
+  'la-liga': {
+    'Real Madrid CF':              'Real Madrid',
+    'FC Barcelona':                'Barcelona',
+    'Club Atlético de Madrid':     'Atletico Madrid',
+    'Sevilla FC':                  'Sevilla',
+    'Valencia CF':                 'Valencia',
+    'Real Betis Balompié':         'Real Betis',
+    'Villarreal CF':               'Villarreal',
+    'RC Celta de Vigo':            'Celta Vigo',
+    'Getafe CF':                   'Getafe',
+    'CA Osasuna':                  'Osasuna',
+    'Rayo Vallecano de Madrid':    'Rayo Vallecano',
+    'RCD Mallorca':                'Mallorca',
+    'Girona FC':                   'Girona',
+    'UD Las Palmas':               'Las Palmas',
+    'Deportivo Alavés':            'Alaves',
+    'Real Valladolid CF':          'Valladolid',
+    'RCD Espanyol de Barcelona':   'Espanyol',
+    'CD Leganés':                  'Leganes',
+  },
+  'bundesliga': {
+    'FC Bayern München':           'Bayern Munich',
+    'Bayer 04 Leverkusen':         'Bayer Leverkusen',
+    '1. FC Union Berlin':          'Union Berlin',
+    'Sport-Club Freiburg':         'Freiburg',
+    'VfL Wolfsburg':               'Wolfsburg',
+    'Borussia Mönchengladbach':    "Borussia M'gladbach",
+    '1. FSV Mainz 05':             'Mainz 05',
+    'FC Augsburg':                 'Augsburg',
+    'VfL Bochum 1848':             'Bochum',
+    'SV Werder Bremen':            'Werder Bremen',
+    'VfB Stuttgart':               'Stuttgart',
+    '1. FC Köln':                  'Koln',
+    'TSG 1899 Hoffenheim':         'Hoffenheim',
+    '1. FC Heidenheim 1846':       'Heidenheim',
+    'SV Darmstadt 98':             'Darmstadt',
+    'FC St. Pauli 1910':           'St. Pauli',
+  },
+  'ligue-1': {
+    'Paris Saint-Germain FC':      'Paris Saint-Germain',
+    'AS Monaco FC':                'Monaco',
+    'LOSC Lille':                  'Lille',
+    'Olympique Lyonnais':          'Lyon',
+    'Stade Rennais FC 1901':       'Rennes',
+    'RC Lens':                     'Lens',
+    'RC Strasbourg Alsace':        'Strasbourg',
+    'Olympique de Marseille':      'Marseille',
+    'OGC Nice':                    'Nice',
+    'Montpellier HSC':             'Montpellier',
+    'FC Nantes':                   'Nantes',
+    'Stade de Reims':              'Reims',
+    'Toulouse FC':                 'Toulouse',
+    'Clermont Foot 63':            'Clermont Foot',
+    'FC Lorient':                  'Lorient',
+    'FC Metz':                     'Metz',
+    'Le Havre AC':                 'Le Havre',
+    'Stade Brestois 29':           'Brest',
+    'AJ Auxerre':                  'Auxerre',
+    'Angers SCO':                  'Angers',
+    'AS Saint-Étienne':            'Saint-Etienne',
+  },
+  'serie-a': {
+    'Juventus FC':                 'Juventus',
+    'FC Internazionale Milano':    'Inter',
+    'AS Roma':                     'Roma',
+    'SSC Napoli':                  'Napoli',
+    'SS Lazio':                    'Lazio',
+    'Atalanta BC':                 'Atalanta',
+    'ACF Fiorentina':              'Fiorentina',
+    'Torino FC':                   'Torino',
+    'Bologna FC 1909':             'Bologna',
+    'Udinese Calcio':              'Udinese',
+    'UC Sampdoria':                'Sampdoria',
+    'Empoli FC':                   'Empoli',
+    'US Sassuolo Calcio':          'Sassuolo',
+    'AC Monza':                    'Monza',
+    'US Lecce':                    'Lecce',
+    'Hellas Verona FC':            'Verona',
+    'Cagliari Calcio':             'Cagliari',
+    'Genoa CFC':                   'Genoa',
+    'Como 1907':                   'Como',
+    'Venezia FC':                  'Venezia',
+    'Parma Calcio 1913':           'Parma',
+    'US Cremonese':                'Cremonese',
+    'Spezia Calcio':               'Spezia',
+    'US Salernitana 1919':         'Salernitana',
+    'Frosinone Calcio':            'Frosinone',
+  },
+};
+
+// Identical scraping + decay logic as fetchUnderstatXG(), parameterised by league.
+// Returns xgMap keyed by Understat team title (e.g. "Inter", "Real Madrid").
+// Falls back to {} on error so predictions degrade gracefully to rolling ratings.
+async function fetchUnderstatXGForLeague(leagueId) {
+  const slug = UNDERSTAT_LEAGUE_SLUG[leagueId];
+  if (!slug) return {};
+
+  const cacheKey = `understat_xg_${leagueId}`;
+  const cached   = getCache(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const year = new Date().getMonth() >= 6 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+    const res  = await withRetry(
+      () => axios.get(`https://understat.com/getLeagueData/${slug}/${year}`, {
+        timeout: 15000,
+        headers: {
+          'User-Agent':        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept':            'application/json, text/javascript, */*; q=0.01',
+          'Referer':           `https://understat.com/league/${slug}/${year}`,
+          'X-Requested-With':  'XMLHttpRequest',
+        },
+      }),
+      { maxAttempts: 2, label: `Understat xG ${leagueId}` }
+    );
+
+    const raw = res.data?.teams;
+    if (!raw || typeof raw !== 'object' || Object.keys(raw).length === 0) {
+      throw new Error(`Understat returned no teams data for ${slug}`);
+    }
+
+    const xgMap   = {};
+    const XG_DECAY = 0.92;
+
+    for (const [, team] of Object.entries(raw)) {
+      const history = team.history ?? [];
+      const n = history.length;
+
+      let homeXG = 0, awayXG = 0, homeXGA = 0, awayXGA = 0;
+      let homeW  = 0, awayW  = 0;
+      let totalXG = 0, totalXGA = 0, totalW = 0;
+
+      for (let i = 0; i < n; i++) {
+        const g       = history[i];
+        const w       = Math.pow(XG_DECAY, n - 1 - i);
+        const scored   = parseFloat(g.xG  ?? 0);
+        const conceded = parseFloat(g.xGA ?? 0);
+
+        totalXG  += scored   * w;
+        totalXGA += conceded * w;
+        totalW   += w;
+
+        if (g.h_a === 'h') {
+          homeXG  += scored   * w; homeXGA += conceded * w; homeW += w;
+        } else {
+          awayXG  += scored   * w; awayXGA += conceded * w; awayW += w;
+        }
+      }
+
+      const safe = v => (isFinite(v) && !isNaN(v) ? v : 0);
+      xgMap[team.title] = {
+        homeXG:    safe(homeW  ? homeXG  / homeW  : totalW ? totalXG  / totalW : 0),
+        awayXG:    safe(awayW  ? awayXG  / awayW  : totalW ? totalXG  / totalW : 0),
+        homeXGA:   safe(homeW  ? homeXGA / homeW  : totalW ? totalXGA / totalW : 0),
+        awayXGA:   safe(awayW  ? awayXGA / awayW  : totalW ? totalXGA / totalW : 0),
+        seasonXG:  safe(totalW ? totalXG  / totalW : 0),
+        seasonXGA: safe(totalW ? totalXGA / totalW : 0),
+        games:     n,
+      };
+    }
+
+    setCache(cacheKey, xgMap, TTL.XG);
+    console.log(`[Understat ${leagueId}] Loaded xG for ${Object.keys(xgMap).length} teams`);
+    return xgMap;
+  } catch (err) {
+    console.warn(`[Understat ${leagueId}] Failed — predictions will use rolling ratings:`, err.message);
+    return {};
+  }
+}
+
 // ─── The Odds API ─────────────────────────────────────────────────────────────
 
 async function fetchOdds(teamName = null) {
@@ -3757,10 +3939,27 @@ app.get('/api/fd/predictions', async (req, res) => {
   if (cached) return res.json(cached);
 
   try {
-    const allMatches = await getFdMatches(code);
+    // Fetch match data and Understat xG in parallel
+    const [allMatches, xgRaw] = await Promise.all([
+      getFdMatches(code),
+      fetchUnderstatXGForLeague(leagueId),
+    ]);
 
     const match = allMatches.find(m => m.id === fixtureId);
     if (!match) return res.status(404).json({ error: 'Fixture not found' });
+
+    // Build xGData keyed by FD team ID, translating FD full names → Understat titles.
+    // Teams whose names match directly (same string) are picked up by the fallback.
+    const nameMap = FD_TO_UNDERSTAT_NAME[leagueId] ?? {};
+    const xGData  = {};
+    for (const m of allMatches) {
+      for (const side of ['homeTeam', 'awayTeam']) {
+        const team = m[side];
+        if (xGData[team.id]) continue;                         // already mapped
+        const usTitle = nameMap[team.name] ?? team.name;       // translate or try direct
+        if (xgRaw[usTitle]) xGData[team.id] = xgRaw[usTitle];
+      }
+    }
 
     const leagueAvg      = calcFdLeagueAverages(allMatches);
     const fplShape       = fdMatchesToFplShape(allMatches);
@@ -3773,7 +3972,7 @@ app.get('/api/fd/predictions', async (req, res) => {
       awayTeam:      { id: match.awayTeam.id, name: match.awayTeam.name },
       leagueAvgHome: leagueAvg.home,
       leagueAvgAway: leagueAvg.away,
-      xGData:        {},   // Understat integration planned for future
+      xGData,
       formData,
       h2hData:       [],
       marketOdds:    null,
