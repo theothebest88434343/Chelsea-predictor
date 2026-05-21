@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import PathToFinal              from '../components/PathToFinal';
 import { format, parseISO } from 'date-fns';
 
 // ─── Flag map ─────────────────────────────────────────────────────────────────
@@ -790,14 +791,6 @@ function TeamDetailModal({ team, data, onClose }) {
 
   const reach = data?.tournamentReach?.[team];
 
-  const pathStages = [
-    { label: 'Advance',       key: 'pAdvance' },
-    { label: 'Round of 16',   key: 'pR16'     },
-    { label: 'Quarter-Final', key: 'pQF'      },
-    { label: 'Semi-Final',    key: 'pSF'      },
-    { label: 'Final',         key: 'pFinal'   },
-    { label: 'Champion',      key: 'pWinner'  },
-  ];
 
   return (
     <div
@@ -931,31 +924,16 @@ function TeamDetailModal({ team, data, onClose }) {
             </div>
           )}
 
-          {/* Path to the Final */}
+          {/* Path to the Final — full journey visualization */}
           {reach && (
-            <div className="card">
-              <div className="card-title">Path to the Final</div>
-              {pathStages.map(({ label, key }) => {
-                const prob = reach[key] ?? 0;
-                return (
-                  <div key={key} style={{
-                    display:      'flex',
-                    alignItems:   'center',
-                    gap:          10,
-                    padding:      '7px 0',
-                    borderBottom: key !== 'pWinner' ? '1px solid var(--border)' : 'none',
-                  }}>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)', minWidth: 100 }}>{label}</span>
-                    <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
-                      <div style={{ width: `${prob * 100}%`, height: '100%', borderRadius: 3, background: color, transition: 'width 400ms' }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color, minWidth: 38, textAlign: 'right' }}>
-                      {pct(prob)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+            <PathToFinal
+              team={team}
+              reach={reach}
+              tournamentReach={data?.tournamentReach ?? {}}
+              groupPredictedStandings={data?.groupPredictedStandings ?? {}}
+              hardcodedGroups={data?.hardcodedGroups ?? {}}
+              color={color}
+            />
           )}
 
           {/* Recent Form */}
