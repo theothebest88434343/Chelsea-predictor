@@ -116,6 +116,19 @@ function useFormData(team) {
   return { data, loading };
 }
 
+function useEloRankings() {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    setLoading(true);
+    fetch('/api/wc/elo-rankings')
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+  return { data, loading };
+}
+
 function useH2HData(home, away, enabled) {
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1084,21 +1097,30 @@ function InsightsView({ data, onTeamClick }) {
                   </div>
                 </div>
 
-                {/* Stats row */}
-                <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
-                  <div style={{ flex: 1, textAlign: 'center' }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>AVG STRENGTH</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: groupColor }}>{g.avg}</div>
-                  </div>
-                  <div style={{ flex: 1, textAlign: 'center' }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>STRENGTH GAP</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{g.gap}</div>
-                  </div>
-                  <div style={{ flex: 1, textAlign: 'center' }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>SCORE</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: meta.color }}>{g.score}</div>
-                  </div>
-                </div>
+                {/* Stats row — normalised so no raw ELO numbers show */}
+                {(() => {
+                  const minElo = 1380, maxElo = 1960;
+                  const avgPct = Math.round(((g.avg - minElo) / (maxElo - minElo)) * 100);
+                  const gapLabel = g.gap >= 350 ? 'Wide' : g.gap >= 200 ? 'Moderate' : 'Tight';
+                  const gapColor = g.gap >= 350 ? '#ef4444' : g.gap >= 200 ? '#f59e0b' : '#10b981';
+                  const teams    = g.teamStrengths.length;
+                  return (
+                    <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
+                      <div style={{ flex: 1, textAlign: 'center' }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>AVG STRENGTH</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: groupColor }}>{avgPct}<span style={{ fontSize: 10, fontWeight: 400 }}>/100</span></div>
+                      </div>
+                      <div style={{ flex: 1, textAlign: 'center' }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>SPREAD</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: gapColor }}>{gapLabel}</div>
+                      </div>
+                      <div style={{ flex: 1, textAlign: 'center' }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 0.6, marginBottom: 2 }}>TEAMS</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-muted)' }}>{teams}</div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Strength bar per team */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1113,7 +1135,9 @@ function InsightsView({ data, onTeamClick }) {
                         <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
                           <div style={{ width: `${tBarPct}%`, height: '100%', borderRadius: 2, background: ti === 0 ? groupColor : `${groupColor}88` }} />
                         </div>
-                        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 32, textAlign: 'right' }}>{t.strength}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 32, textAlign: 'right' }}>
+                          {Math.round(((t.strength - 1380) / (1960 - 1380)) * 100)}
+                        </span>
                       </div>
                     );
                   })}
@@ -1562,6 +1586,88 @@ function AccuracyView({ data }) {
 
       <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', fontStyle: 'italic' }}>
         Poisson model predictions vs actual results · for entertainment only
+      </div>
+    </div>
+  );
+}
+
+// ELO Rankings — all 48 WC teams ranked by live dynamic ELO
+function EloRankingsView() {
+  const { data, loading } = useEloRankings();
+
+  const CONFED_COLOR = {
+    CONMEBOL: '#3b82f6',
+    UEFA:     '#10b981',
+    CONCACAF: '#f59e0b',
+    CAF:      '#ef4444',
+    AFC:      '#8b5cf6',
+    OFC:      '#06b6d4',
+  };
+
+  if (loading) return <div className="loading-card"><div className="spinner" /><div>Loading rankings…</div></div>;
+  if (!data?.rankings?.length) return null;
+
+  const rankings = data.rankings;
+  const maxElo = rankings[0].elo;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 2 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          Live ELO ratings built from <strong style={{ color: 'var(--text-primary)' }}>international results since 2018</strong> — weighted by tournament importance and time decay. Updates daily.
+          {data.usingDynamicElo && <span style={{ color: 'var(--green)', marginLeft: 6, fontWeight: 700 }}>● Live</span>}
+        </div>
+        {/* Confederation legend */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', marginTop: 8 }}>
+          {Object.entries(CONFED_COLOR).map(([c, col]) => (
+            <span key={c} style={{ fontSize: 9, fontWeight: 700, color: col }}>■ {c}</span>
+          ))}
+        </div>
+      </div>
+
+      {rankings.map((t, i) => {
+        const confedColor = CONFED_COLOR[t.confederation] ?? 'var(--text-muted)';
+        const barPct = maxElo > 0 ? (t.elo / maxElo) * 100 : 0;
+        const isTop3 = i < 3;
+        const MEDAL = ['🥇', '🥈', '🥉'];
+        return (
+          <div key={t.team} className="card" style={{
+            padding: '10px 14px',
+            borderLeft: `3px solid ${isTop3 ? confedColor : 'var(--border)'}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{
+                fontFamily: 'Bebas Neue, sans-serif', fontSize: 18,
+                color: isTop3 ? confedColor : 'var(--text-muted)',
+                minWidth: 28, textAlign: 'center',
+              }}>
+                {isTop3 ? MEDAL[i] : t.rank}
+              </div>
+              <span style={{ fontSize: 20, lineHeight: 1 }}>{flag(t.team)}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>{t.team}</span>
+                  {t.hostNation && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--gold)', background: 'rgba(219,161,17,0.15)', borderRadius: 4, padding: '1px 5px' }}>HOST</span>}
+                </div>
+                <div style={{ fontSize: 10, color: confedColor, fontWeight: 600, marginTop: 1 }}>{t.confederation}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 20, color: isTop3 ? confedColor : 'var(--text-primary)', letterSpacing: 1 }}>
+                  {t.elo}
+                </div>
+                <div style={{ fontSize: 9, color: 'var(--text-muted)' }}>ELO</div>
+              </div>
+            </div>
+            {/* ELO bar */}
+            <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+              <div style={{ width: `${barPct}%`, height: '100%', background: confedColor, borderRadius: 2 }} />
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 4, fontStyle: 'italic' }}>
+        K-factors: World Cup=60 · Major tournaments=50 · Qualifiers=40 · Friendlies=20 · Time-decayed
       </div>
     </div>
   );
@@ -2121,12 +2227,14 @@ export default function WorldCup() {
           { id: 'bracket',  label: 'Bracket' },
           { id: 'knockout', label: 'Knockout', disabled: !isKnockout && !data?.knockoutFixtures?.length },
           { id: 'accuracy', label: '📊 Accuracy' },
+          { id: 'rankings', label: '📈 Rankings' },
         ] : [
           { id: 'groups',   label: 'Groups' },
           { id: 'table',    label: 'Table' },
           { id: 'bracket',  label: 'Bracket' },
           { id: 'insights', label: 'Insights' },
           { id: 'odds',     label: '🏆 Odds' },
+          { id: 'rankings', label: '📈 Rankings' },
         ]).map(({ id, label, disabled }) => (
           <button
             key={id}
@@ -2153,7 +2261,9 @@ export default function WorldCup() {
       </div>
 
       {/* Content */}
-      {view === 'bracket' ? (
+      {view === 'rankings' ? (
+        <EloRankingsView />
+      ) : view === 'bracket' ? (
         <BracketView data={{ hardcodedGroups: {}, ...data }} />
       ) : !hasApiData && view === 'table' ? (
         <PredictedTableView data={{ hardcodedGroups: {}, ...data }} onTeamClick={setSelectedTeam} />

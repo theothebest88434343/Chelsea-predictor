@@ -28,6 +28,7 @@ const {
   calculateLambdas,
   buildRollingRatings,
   buildEloRatings,
+  buildTeamHomeAdvantage,
   simulateSeason,
   logLoss,
   brierScore,
@@ -35,6 +36,40 @@ const {
   bettingSimulator,
   FORM_WEIGHTS,
 } = require('./models/predictionEngine');
+
+const { runDiagnostics }            = require('./models/modelDiagnostics');
+const { generateCalibrationReport } = require('./models/autoCalibrator');
+const modelMonitor                  = require('./core/observability/modelMonitor');
+
+// ─── Core infrastructure ──────────────────────────────────────────────────────
+const logger          = require('./core/observability/logger');
+const failures        = require('./core/observability/failureRegistry');
+const cache           = require('./core/cache/cacheManager');
+const {
+  WC_MODEL_VERSION,
+  TTL,
+  ELO_CONFIG,
+  FLAGS,
+} = require('./core/state/modelState');
+const {
+  FIFA_STRENGTH,
+  WC_HOST_NATIONS,
+  WC_CONFEDERATION,
+  CONFED_LAMBDA_FACTOR,
+  MARTJ42_ALIAS,
+  WC_GROUPS,
+  WC_SCHEDULE,
+} = require('./core/config/footballConfig');
+
+const {
+  poissonPMF:       _corePoissonPMF,
+  calculateEloRatings,
+  buildFormStats,
+  calcMatchAverages,
+  getRestDays:      _coreRestDays,
+  PL_ACCESSORS,
+  FD_ACCESSORS,
+} = require('./core/footballEngine');
 
 // ─── Supabase ─────────────────────────────────────────────────────────────────
 // Primary persistence layer. Falls back to local JSON files when env vars are
@@ -95,19 +130,11 @@ async function sendPushToAll(payload) {
 }
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
+// All caching goes through core/cache/cacheManager (unified TTL, invalidation,
+// health stats, and file-persistence helpers).
 
-const cache = new Map();
-
-function setCache(key, value, ttlMs) {
-  cache.set(key, { value, expires: Date.now() + ttlMs });
-}
-
-function getCache(key) {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expires) { cache.delete(key); return null; }
-  return entry.value;
-}
+function setCache(key, value, ttlMs) { cache.set(key, value, ttlMs); }
+function getCache(key)               { return cache.get(key); }
 
 // ─── Retry with exponential backoff ──────────────────────────────────────────
 // Retries on network failures and 5xx. Never retries 4xx (client errors).
@@ -129,16 +156,7 @@ async function withRetry(fn, { maxAttempts = 3, baseDelayMs = 800, label = '' } 
   throw lastErr;
 }
 
-const TTL = {
-  FPL:      5  * 60 * 1000,
-  XG:       60 * 60 * 1000,
-  ODDS:     60 * 60 * 1000,
-  ODDS_HOT: 15 * 60 * 1000,
-  ACCURACY: 2  * 60 * 60 * 1000,
-  TABLE:    5  * 60 * 1000,
-  XPTS:     10 * 60 * 1000,
-  WEATHER:  60 * 60 * 1000,
-};
+// TTL imported from core/state/modelState — single source of truth.
 
 // ─── Prediction history ───────────────────────────────────────────────────────
 
@@ -747,100 +765,18 @@ async function fetchH2H(opponentName, myTeamName = 'Chelsea FC') {
 
 // ─── Form data from FPL ───────────────────────────────────────────────────────
 
-async function buildFormData(fixtures, teams, chelseaId) {
-  const formMap = {};
-
-  const wavg = (games, goalsFor, goalsAgainst) => {
-    if (!games.length) return { sc: 0, co: 0 };
-    const ws  = FORM_WEIGHTS.slice(0, games.length);
-    const wSum = ws.reduce((a, b) => a + b, 0) || 1;
-    let sc = 0, co = 0;
-    for (let i = 0; i < games.length; i++) {
-      const w = (FORM_WEIGHTS[i] ?? 0) / wSum;
-      sc += goalsFor(games[i])     * w;
-      co += goalsAgainst(games[i]) * w;
-    }
-    return { sc, co }; // weighted per-game averages (denominator already applied)
-  };
-
-  for (const team of teams) {
-    const allPlayed = fixtures
-      .filter(f => f.finished && (f.team_h === team.id || f.team_a === team.id))
-      .sort((a, b) => new Date(b.kickoff_time) - new Date(a.kickoff_time));
-
-    // ─── Venue-specific recent form (last 5 home / last 5 away separately) ──
-    // CRITICAL: home and away games are weighted independently so that each
-    // signal is compared against the correct league average (home vs away),
-    // eliminating the venue-context mixing bug that suppressed home attack ratings.
-    const homePlayed = allPlayed.filter(f => f.team_h === team.id).slice(0, 5);
-    const awayPlayed = allPlayed.filter(f => f.team_a === team.id).slice(0, 5);
-
-    const homeRecent = wavg(homePlayed, f => f.team_h_score ?? 0, f => f.team_a_score ?? 0);
-    const awayRecent = wavg(awayPlayed, f => f.team_a_score ?? 0, f => f.team_h_score ?? 0);
-
-    // ─── Season venue splits ─────────────────────────────────────────────────
-    let seasonHomeScored = 0, seasonHomeConceded = 0;
-    let seasonAwayScored = 0, seasonAwayConceded = 0;
-    for (const f of allPlayed) {
-      if (f.team_h === team.id) {
-        seasonHomeScored   += f.team_h_score ?? 0;
-        seasonHomeConceded += f.team_a_score ?? 0;
-      } else {
-        seasonAwayScored   += f.team_a_score ?? 0;
-        seasonAwayConceded += f.team_h_score ?? 0;
-      }
-    }
-    const allHome = allPlayed.filter(f => f.team_h === team.id);
-    const allAway = allPlayed.filter(f => f.team_a === team.id);
-
-    // ─── Mixed recent form (kept for backward-compat fallback path only) ────
-    const mixed = allPlayed.slice(0, 5);
-    const mixedStats = wavg(
-      mixed,
-      f => (f.team_h === team.id ? f.team_h_score : f.team_a_score) ?? 0,
-      f => (f.team_h === team.id ? f.team_a_score : f.team_h_score) ?? 0,
-    );
-
-    formMap[team.id] = {
-      // ─── Venue-specific recent form (PRIMARY — used by getAttack/getDefense) ─
-      homeScored:   homeRecent.sc,
-      homeConceded: homeRecent.co,
-      homeGames:    homePlayed.length,
-      awayScored:   awayRecent.sc,
-      awayConceded: awayRecent.co,
-      awayGames:    awayPlayed.length,
-      // ─── Season venue splits (anchor when insufficient recent games) ────────
-      seasonHomeScored,  seasonHomeConceded, seasonHomeGames: allHome.length,
-      seasonAwayScored,  seasonAwayConceded, seasonAwayGames: allAway.length,
-      // ─── Mixed season totals (fallback / display) ────────────────────────────
-      seasonScored:   seasonHomeScored + seasonAwayScored,
-      seasonConceded: seasonHomeConceded + seasonAwayConceded,
-      seasonGames:    allPlayed.length,
-      // ─── Mixed recent (legacy fallback in engine, also used for recentResults) ─
-      scored:  mixedStats.sc,
-      conceded: mixedStats.co,
-      games:   1,
-      recentResults: mixed.map(f => ({
-        homeGoals: f.team_h === team.id ? f.team_h_score : f.team_a_score,
-        awayGoals: f.team_h === team.id ? f.team_a_score : f.team_h_score,
-      })),
-    };
-  }
-
-  return formMap;
+// buildFormData — now delegates to core buildFormStats with PL accessors.
+// Output shape is unchanged.
+async function buildFormData(fixtures, teams, _chelseaId) {
+  const teamIds = teams.map(t => t.id);
+  return buildFormStats(fixtures, teamIds, PL_ACCESSORS, FORM_WEIGHTS);
 }
 
 // ─── League average goals ─────────────────────────────────────────────────────
 
+// calcLeagueAverages — now delegates to core with PL accessors.
 function calcLeagueAverages(fixtures) {
-  const finished = fixtures.filter(f => f.finished);
-  if (!finished.length) return { home: 1.52, away: 1.18 };
-  const totalHome = finished.reduce((s, f) => s + (f.team_h_score ?? 0), 0);
-  const totalAway = finished.reduce((s, f) => s + (f.team_a_score ?? 0), 0);
-  return {
-    home: totalHome / finished.length,
-    away: totalAway / finished.length,
-  };
+  return calcMatchAverages(fixtures, PL_ACCESSORS);
 }
 
 // ─── Rolling ratings (cached 5 min) ──────────────────────────────────────────
@@ -865,6 +801,19 @@ async function getEloRatings() {
   const result      = buildEloRatings(allFixtures);
   setCache('elo_ratings', result, TTL.FPL);
   return result;
+}
+
+// ─── Rest days helper ─────────────────────────────────────────────────────────
+// Returns the number of calendar days between a team's most recent finished
+// fixture and the kickoff of the next one. Returns null if no prior game found.
+
+// getRestDays / getFdRestDays — both now delegate to core with their respective accessors.
+function getRestDays(teamId, kickoffTime, allFixtures) {
+  return _coreRestDays(teamId, kickoffTime, allFixtures, PL_ACCESSORS);
+}
+
+function getFdRestDays(teamId, kickoffTime, allMatches) {
+  return _coreRestDays(teamId, kickoffTime, allMatches, FD_ACCESSORS);
 }
 
 // ─── Referee stats ────────────────────────────────────────────────────────────
@@ -1345,6 +1294,11 @@ async function buildPrediction(fix, bs, allFixtures) {
       .filter(p => p.team === awayTeam.id && (p.status === 'i' || p.status === 'd') && p.chance_of_playing_next_round !== null && p.chance_of_playing_next_round < 50)
       .length;
 
+    const homeRestDays = getRestDays(homeTeam.id, fix.kickoff_time, allFixtures);
+    const awayRestDays = getRestDays(awayTeam.id, fix.kickoff_time, allFixtures);
+    const teamHomeAdvFactors = buildTeamHomeAdvantage(allFixtures);
+    const teamHomeAdvFactor  = teamHomeAdvFactors[String(homeTeam.id)] ?? 1.0;
+
     prediction = predict({
       homeTeam:      { id: homeTeam.id, name: homeTeam.name },
       awayTeam:      { id: awayTeam.id, name: awayTeam.name },
@@ -1354,10 +1308,16 @@ async function buildPrediction(fix, bs, allFixtures) {
       formData,
       h2hData,
       marketOdds,
-      homeInjuries:  homeInj,
-      awayInjuries:  awayInj,
+      homeInjuries:     homeInj,
+      awayInjuries:     awayInj,
       rollingRatings,
       eloRatings,
+      homeRestDays,
+      awayRestDays,
+      teamHomeAdvFactor,
+      refereeData: refStats
+        ? { yellowsPerGame: refStats.yellowsPerGame, leagueAvgYellows: avgYellows }
+        : null,
     });
 
     const immediateResult = isFixtureSettled(fix)
@@ -2613,26 +2573,7 @@ async function backfillPendingResults() {
 
 // ─── World Cup 2026 ───────────────────────────────────────────────────────────
 
-// FIFA ranking strength points (approximate, used for Poisson lambdas)
-const FIFA_STRENGTH = {
-  // Top tier
-  Argentina: 1870, France: 1854, England: 1818, Brazil: 1794, Spain: 1787,
-  Portugal: 1764, Netherlands: 1752, Belgium: 1745, Germany: 1743,
-  // Second tier
-  Croatia: 1716, Morocco: 1712, USA: 1692, 'United States': 1692, Mexico: 1680,
-  Colombia: 1678, Uruguay: 1676, Senegal: 1672, Canada: 1660, Japan: 1659,
-  Ecuador: 1658, Switzerland: 1652, Australia: 1645, 'South Korea': 1642,
-  'Korea Republic': 1642, Sweden: 1638, Norway: 1622, Iran: 1640, Turkey: 1618,
-  // Third tier
-  Scotland: 1612, 'Czech Republic': 1608, Austria: 1606, Panama: 1608,
-  Ghana: 1604, 'Saudi Arabia': 1598, Algeria: 1585, Egypt: 1580,
-  "Côte d'Ivoire": 1598, 'Ivory Coast': 1598, 'South Africa': 1572,
-  'New Zealand': 1490, 'DR Congo': 1485, Uzbekistan: 1462,
-  // Fourth tier
-  'Bosnia & Herzegovina': 1578, Tunisia: 1562, Paraguay: 1562, Iraq: 1558,
-  Qatar: 1545, 'Cabo Verde': 1498, Jordan: 1475, Haiti: 1445,
-  'Curaçao': 1412,
-};
+// FIFA_STRENGTH imported from core/config/footballConfig.
 
 function wcStrength(name) {
   // Prefer live ELO built from martj42 results; fall back to hardcoded FIFA ratings
@@ -2659,158 +2600,145 @@ function wcStrength(name) {
   return key ? FIFA_STRENGTH[key] : 1500;
 }
 
-// Poisson prediction for neutral-venue international football
-function wcPoisson(homeTeam, awayTeam, simCount = 50000) {
-  const BASE_LAMBDA = 1.30;
+// ─── WC model helpers ─────────────────────────────────────────────────────────
+
+// Host nations — play in front of home crowds, get a lambda boost
+// WC_HOST_NATIONS imported from core/config/footballConfig.
+
+// WC_CONFEDERATION imported from core/config/footballConfig.
+
+// CONFED_LAMBDA_FACTOR imported from core/config/footballConfig.
+
+function confedFactor(team) {
+  const c = WC_CONFEDERATION[team] ?? WC_CONFEDERATION[toMartj42(team)] ?? 'UEFA';
+  return CONFED_LAMBDA_FACTOR[c] ?? 1.0;
+}
+
+function isHostNation(team) {
+  return WC_HOST_NATIONS.has(team) || WC_HOST_NATIONS.has(toMartj42(team));
+}
+
+// poissonPMF now sourced from core — single implementation across all pipelines.
+const poissonPMF = _corePoissonPMF;
+
+// Compute adjusted attack lambdas for a matchup — shared by wcPoisson and Monte Carlo
+function wcLambdas(homeTeam, awayTeam) {
+  const BASE = 1.30;
   const hStr = wcStrength(homeTeam);
   const aStr = wcStrength(awayTeam);
   const diff = (hStr - aStr) / 400;
-  const lambdaH = Math.max(0.3, BASE_LAMBDA * Math.exp( diff * 1.1));
-  const lambdaA = Math.max(0.3, BASE_LAMBDA * Math.exp(-diff * 1.1));
 
-  function poisson(lambda) {
-    let L = Math.exp(-lambda), k = 0, p = 1;
-    do { k++; p *= Math.random(); } while (p > L);
-    return k - 1;
+  // Scale of 0.88 — balances realistic score variety with tournament win spread.
+  // 1.1 gave Spain 34% to win the tournament (too high).
+  // 0.75 compressed lambdas so all matches predicted 1-1 (too low).
+  // 0.88 gives Spain ~22% and realistic score differentiation between groups.
+  let lH = Math.max(0.3, BASE * Math.exp( diff * 0.88));
+  let lA = Math.max(0.3, BASE * Math.exp(-diff * 0.88));
+
+  // Host nation boost (~0.2–0.3 extra goals historically)
+  if (isHostNation(homeTeam)) lH = Math.min(lH * 1.18, lH + 0.22);
+  if (isHostNation(awayTeam)) lA = Math.min(lA * 1.10, lA + 0.12);
+
+  // Confederation calibration
+  lH *= confedFactor(homeTeam);
+  lA *= confedFactor(awayTeam);
+
+  return { lH: Math.max(0.3, lH), lA: Math.max(0.3, lA) };
+}
+
+// H2H nudge — uses in-memory results synchronously (cache populated at startup)
+// Returns a small ±value to add to homeWin probability
+function h2hNudge(homeTeam, awayTeam) {
+  if (!_intlResultsCache) return 0;
+  const hAlias = toMartj42(homeTeam);
+  const aAlias = toMartj42(awayTeam);
+  const meetings = _intlResultsCache.filter(r =>
+    (r.home === hAlias && r.away === aAlias) ||
+    (r.home === aAlias && r.away === hAlias)
+  );
+  if (meetings.length < 5) return 0;
+  let hW = 0, aW = 0;
+  for (const m of meetings) {
+    const hS = m.home === hAlias ? m.homeScore : m.awayScore;
+    const aS = m.home === hAlias ? m.awayScore : m.homeScore;
+    if (hS > aS) hW++; else if (aS > hS) aW++;
   }
+  // Max nudge ±0.05 based on historical dominance
+  return ((hW - aW) / meetings.length) * 0.08;
+}
 
-  let hWins = 0, aWins = 0, draws = 0;
+// Poisson prediction — matrix approach with Dixon-Coles correction (replaces Monte Carlo)
+function wcPoisson(homeTeam, awayTeam) {
+  const { lH, lA } = wcLambdas(homeTeam, awayTeam);
+
+  // Dixon-Coles τ correlation (negative = slight positive correlation in low-scoring games)
+  const RHO = -0.10;
+  const MAX = 8;
+
+  let hWin = 0, draw = 0, aWin = 0;
   const scores = {};
-  for (let i = 0; i < simCount; i++) {
-    const h = poisson(lambdaH);
-    const a = poisson(lambdaA);
-    const key = `${h}-${a}`;
-    scores[key] = (scores[key] ?? 0) + 1;
-    if (h > a) hWins++; else if (h < a) aWins++; else draws++;
+
+  for (let h = 0; h <= MAX; h++) {
+    for (let a = 0; a <= MAX; a++) {
+      let p = poissonPMF(h, lH) * poissonPMF(a, lA);
+      // Dixon-Coles τ correction for low-scoring cells
+      if      (h === 0 && a === 0) p *= 1 - lH * lA * RHO;
+      else if (h === 1 && a === 0) p *= 1 + lA * RHO;
+      else if (h === 0 && a === 1) p *= 1 + lH * RHO;
+      else if (h === 1 && a === 1) p *= 1 - RHO;
+
+      scores[`${h}-${a}`] = (scores[`${h}-${a}`] ?? 0) + p;
+      if (h > a) hWin += p;
+      else if (h < a) aWin += p;
+      else draw += p;
+    }
   }
 
-  const topScore = Object.entries(scores).sort((a, b) => b[1] - a[1])[0][0];
+  // Normalise (Dixon-Coles slightly perturbs total)
+  const total = hWin + draw + aWin;
+  hWin /= total; draw /= total; aWin /= total;
+
+  // H2H nudge — small adjustment toward historically dominant side
+  const nudge = h2hNudge(homeTeam, awayTeam);
+  if (Math.abs(nudge) > 0.001) {
+    hWin = Math.max(0.05, Math.min(0.90, hWin + nudge));
+    aWin = Math.max(0.05, Math.min(0.90, aWin - nudge * 0.6));
+    draw = Math.max(0.05, 1 - hWin - aWin);
+  }
+
+  // Hybrid predicted score:
+  // - If one team has ≥37% win probability → conditional argmax (most likely score
+  //   given that outcome), so moderate favourites (38-44%) show 1-0 / 2-1 rather
+  //   than defaulting to 1-1. Threshold was 0.45 — too high, caused Germany vs
+  //   Ecuador (44%) and Turkey vs USA (40%) to show 1-1 despite a clear favourite.
+  // - Otherwise (genuine toss-up, both ≤37%) → unconditional matrix argmax, which
+  //   naturally gives 1-1 for truly equal matchups. Preserves draw predictions.
+  const sortedScores = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  let predictedScore;
+  if (hWin >= 0.37 || aWin >= 0.37) {
+    const outcome = hWin >= aWin ? 'home' : 'away';
+    const filtered = sortedScores.filter(([s]) => {
+      const [h, a] = s.split('-').map(Number);
+      return outcome === 'home' ? h > a : a > h;
+    });
+    predictedScore = filtered.length > 0 ? filtered[0][0] : sortedScores[0][0];
+  } else {
+    predictedScore = sortedScores[0][0];
+  }
+
   return {
-    homeWin:        hWins / simCount,
-    draw:           draws / simCount,
-    awayWin:        aWins / simCount,
-    lambdaHome:     parseFloat(lambdaH.toFixed(2)),
-    lambdaAway:     parseFloat(lambdaA.toFixed(2)),
-    predictedScore: topScore,
+    homeWin:        +hWin.toFixed(4),
+    draw:           +draw.toFixed(4),
+    awayWin:        +aWin.toFixed(4),
+    lambdaHome:     +lH.toFixed(2),
+    lambdaAway:     +lA.toFixed(2),
+    predictedScore,
   };
 }
 
-// Hardcoded 2026 World Cup group draw — confirmed official draw (December 2024)
-// 48 teams across 12 groups of 4. Top 2 + best 8 third-place teams advance to R32.
-const WC_GROUPS = {
-  A: ['Mexico',         'South Africa',          'South Korea',    'Czech Republic'],
-  B: ['Canada',         'Bosnia & Herzegovina',  'Qatar',          'Switzerland'],
-  C: ['Brazil',         'Morocco',               'Haiti',          'Scotland'],
-  D: ['United States',  'Paraguay',              'Australia',      'Turkey'],
-  E: ['Germany',        'Curaçao',               "Côte d'Ivoire",  'Ecuador'],
-  F: ['Netherlands',    'Japan',                 'Sweden',         'Tunisia'],
-  G: ['Belgium',        'Egypt',                 'Iran',           'New Zealand'],
-  H: ['Spain',          'Cabo Verde',            'Saudi Arabia',   'Uruguay'],
-  I: ['France',         'Senegal',               'Iraq',           'Norway'],
-  J: ['Argentina',      'Algeria',               'Austria',        'Jordan'],
-  K: ['Portugal',       'DR Congo',              'Uzbekistan',     'Colombia'],
-  L: ['England',        'Croatia',               'Ghana',          'Panama'],
-};
+// WC_GROUPS imported from core/config/footballConfig — single source of truth.
 
-// ─── Full group-stage schedule (all 72 matches, UTC kickoffs) ─────────────────
-// Team names must match WC_GROUPS exactly.  Venues are the confirmed host stadiums.
-const WC_SCHEDULE = [
-  // ── Group A ─────────────────────────────────────────────────────────────────
-  { group:'A', md:1, home:'Mexico',         away:'South Africa',         kickoff:'2026-06-11T19:00:00Z', venue:'Estadio Azteca',          city:'Mexico City' },
-  { group:'A', md:1, home:'South Korea',    away:'Czech Republic',       kickoff:'2026-06-12T02:00:00Z', venue:'Estadio Akron',           city:'Zapopan' },
-  { group:'A', md:2, home:'Czech Republic', away:'South Africa',         kickoff:'2026-06-18T16:00:00Z', venue:'Mercedes-Benz Stadium',   city:'Atlanta' },
-  { group:'A', md:2, home:'Mexico',         away:'South Korea',          kickoff:'2026-06-19T01:00:00Z', venue:'Estadio Akron',           city:'Zapopan' },
-  { group:'A', md:3, home:'South Africa',   away:'South Korea',          kickoff:'2026-06-25T01:00:00Z', venue:'Estadio BBVA',            city:'Guadalupe' },
-  { group:'A', md:3, home:'Czech Republic', away:'Mexico',               kickoff:'2026-06-25T01:00:00Z', venue:'Estadio Azteca',          city:'Mexico City' },
-
-  // ── Group B ─────────────────────────────────────────────────────────────────
-  { group:'B', md:1, home:'Canada',              away:'Bosnia & Herzegovina', kickoff:'2026-06-12T19:00:00Z', venue:'BMO Field',            city:'Toronto' },
-  { group:'B', md:1, home:'Qatar',               away:'Switzerland',          kickoff:'2026-06-13T19:00:00Z', venue:"Levi's Stadium",       city:'Santa Clara' },
-  { group:'B', md:2, home:'Switzerland',         away:'Bosnia & Herzegovina', kickoff:'2026-06-18T19:00:00Z', venue:'SoFi Stadium',         city:'Inglewood' },
-  { group:'B', md:2, home:'Canada',              away:'Qatar',                kickoff:'2026-06-18T22:00:00Z', venue:'BC Place',             city:'Vancouver' },
-  { group:'B', md:3, home:'Bosnia & Herzegovina',away:'Qatar',               kickoff:'2026-06-24T19:00:00Z', venue:'Lumen Field',           city:'Seattle' },
-  { group:'B', md:3, home:'Switzerland',         away:'Canada',               kickoff:'2026-06-24T19:00:00Z', venue:'BC Place',             city:'Vancouver' },
-
-  // ── Group C ─────────────────────────────────────────────────────────────────
-  { group:'C', md:1, home:'Brazil',   away:'Morocco',  kickoff:'2026-06-13T22:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
-  { group:'C', md:1, home:'Haiti',    away:'Scotland', kickoff:'2026-06-14T01:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
-  { group:'C', md:2, home:'Scotland', away:'Morocco',  kickoff:'2026-06-19T22:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
-  { group:'C', md:2, home:'Brazil',   away:'Haiti',    kickoff:'2026-06-20T01:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
-  { group:'C', md:3, home:'Scotland', away:'Brazil',   kickoff:'2026-06-24T22:00:00Z', venue:'Hard Rock Stadium',       city:'Miami Gardens' },
-  { group:'C', md:3, home:'Morocco',  away:'Haiti',    kickoff:'2026-06-24T22:00:00Z', venue:'Mercedes-Benz Stadium',   city:'Atlanta' },
-
-  // ── Group D ─────────────────────────────────────────────────────────────────
-  { group:'D', md:1, home:'United States', away:'Paraguay',       kickoff:'2026-06-13T01:00:00Z', venue:'SoFi Stadium',    city:'Inglewood' },
-  { group:'D', md:1, home:'Australia',     away:'Turkey',         kickoff:'2026-06-14T01:00:00Z', venue:'BC Place',        city:'Vancouver' },
-  { group:'D', md:2, home:'Turkey',        away:'Paraguay',       kickoff:'2026-06-19T04:00:00Z', venue:"Levi's Stadium",  city:'Santa Clara' },
-  { group:'D', md:2, home:'United States', away:'Australia',      kickoff:'2026-06-19T19:00:00Z', venue:'Lumen Field',     city:'Seattle' },
-  { group:'D', md:3, home:'Turkey',        away:'United States',  kickoff:'2026-06-26T02:00:00Z', venue:'SoFi Stadium',    city:'Inglewood' },
-  { group:'D', md:3, home:'Paraguay',      away:'Australia',      kickoff:'2026-06-26T02:00:00Z', venue:"Levi's Stadium",  city:'Santa Clara' },
-
-  // ── Group E ─────────────────────────────────────────────────────────────────
-  { group:'E', md:1, home:'Germany',        away:'Curaçao',       kickoff:'2026-06-14T17:00:00Z', venue:'NRG Stadium',             city:'Houston' },
-  { group:'E', md:1, home:"Côte d'Ivoire",  away:'Ecuador',       kickoff:'2026-06-14T23:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
-  { group:'E', md:2, home:'Germany',        away:"Côte d'Ivoire", kickoff:'2026-06-20T20:00:00Z', venue:'BMO Field',               city:'Toronto' },
-  { group:'E', md:2, home:'Ecuador',        away:'Curaçao',       kickoff:'2026-06-21T00:00:00Z', venue:'Arrowhead Stadium',       city:'Kansas City' },
-  { group:'E', md:3, home:'Ecuador',        away:'Germany',       kickoff:'2026-06-25T20:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
-  { group:'E', md:3, home:'Curaçao',        away:"Côte d'Ivoire", kickoff:'2026-06-25T20:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
-
-  // ── Group F ─────────────────────────────────────────────────────────────────
-  { group:'F', md:1, home:'Netherlands', away:'Japan',    kickoff:'2026-06-14T20:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
-  { group:'F', md:1, home:'Sweden',      away:'Tunisia',  kickoff:'2026-06-15T02:00:00Z', venue:'Estadio BBVA',      city:'Guadalupe' },
-  { group:'F', md:2, home:'Tunisia',     away:'Japan',    kickoff:'2026-06-20T04:00:00Z', venue:'Estadio BBVA',      city:'Guadalupe' },
-  { group:'F', md:2, home:'Netherlands', away:'Sweden',   kickoff:'2026-06-20T17:00:00Z', venue:'NRG Stadium',       city:'Houston' },
-  { group:'F', md:3, home:'Japan',       away:'Sweden',   kickoff:'2026-06-25T23:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
-  { group:'F', md:3, home:'Tunisia',     away:'Netherlands', kickoff:'2026-06-25T23:00:00Z', venue:'Arrowhead Stadium', city:'Kansas City' },
-
-  // ── Group G ─────────────────────────────────────────────────────────────────
-  { group:'G', md:1, home:'Belgium',     away:'Egypt',        kickoff:'2026-06-15T19:00:00Z', venue:'BC Place',     city:'Vancouver' },
-  { group:'G', md:1, home:'Iran',        away:'New Zealand',  kickoff:'2026-06-16T01:00:00Z', venue:'SoFi Stadium', city:'Inglewood' },
-  { group:'G', md:2, home:'Belgium',     away:'Iran',         kickoff:'2026-06-21T19:00:00Z', venue:'SoFi Stadium', city:'Inglewood' },
-  { group:'G', md:2, home:'New Zealand', away:'Egypt',        kickoff:'2026-06-22T01:00:00Z', venue:'BC Place',     city:'Vancouver' },
-  { group:'G', md:3, home:'Egypt',       away:'Iran',         kickoff:'2026-06-27T03:00:00Z', venue:'Lumen Field',  city:'Seattle' },
-  { group:'G', md:3, home:'New Zealand', away:'Belgium',      kickoff:'2026-06-27T03:00:00Z', venue:'BC Place',     city:'Vancouver' },
-
-  // ── Group H ─────────────────────────────────────────────────────────────────
-  { group:'H', md:1, home:'Spain',        away:'Cabo Verde',   kickoff:'2026-06-15T16:00:00Z', venue:'Mercedes-Benz Stadium', city:'Atlanta' },
-  { group:'H', md:1, home:'Saudi Arabia', away:'Uruguay',      kickoff:'2026-06-15T22:00:00Z', venue:'Hard Rock Stadium',     city:'Miami Gardens' },
-  { group:'H', md:2, home:'Spain',        away:'Saudi Arabia', kickoff:'2026-06-21T16:00:00Z', venue:'Mercedes-Benz Stadium', city:'Atlanta' },
-  { group:'H', md:2, home:'Uruguay',      away:'Cabo Verde',   kickoff:'2026-06-21T22:00:00Z', venue:'Hard Rock Stadium',     city:'Miami Gardens' },
-  { group:'H', md:3, home:'Cabo Verde',   away:'Saudi Arabia', kickoff:'2026-06-27T00:00:00Z', venue:'NRG Stadium',           city:'Houston' },
-  { group:'H', md:3, home:'Uruguay',      away:'Spain',        kickoff:'2026-06-27T00:00:00Z', venue:'Estadio Akron',         city:'Zapopan' },
-
-  // ── Group I ─────────────────────────────────────────────────────────────────
-  { group:'I', md:1, home:'France',   away:'Senegal', kickoff:'2026-06-16T19:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
-  { group:'I', md:1, home:'Iraq',     away:'Norway',  kickoff:'2026-06-16T22:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
-  { group:'I', md:2, home:'France',   away:'Iraq',    kickoff:'2026-06-22T21:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
-  { group:'I', md:2, home:'Norway',   away:'Senegal', kickoff:'2026-06-23T00:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
-  { group:'I', md:3, home:'Norway',   away:'France',  kickoff:'2026-06-26T19:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
-  { group:'I', md:3, home:'Senegal',  away:'Iraq',    kickoff:'2026-06-26T19:00:00Z', venue:'BMO Field',               city:'Toronto' },
-
-  // ── Group J ─────────────────────────────────────────────────────────────────
-  { group:'J', md:1, home:'Austria',   away:'Jordan',    kickoff:'2026-06-16T04:00:00Z', venue:"Levi's Stadium",    city:'Santa Clara' },
-  { group:'J', md:1, home:'Argentina', away:'Algeria',   kickoff:'2026-06-17T01:00:00Z', venue:'Arrowhead Stadium', city:'Kansas City' },
-  { group:'J', md:2, home:'Argentina', away:'Austria',   kickoff:'2026-06-22T17:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
-  { group:'J', md:2, home:'Jordan',    away:'Algeria',   kickoff:'2026-06-23T03:00:00Z', venue:"Levi's Stadium",    city:'Santa Clara' },
-  { group:'J', md:3, home:'Algeria',   away:'Austria',   kickoff:'2026-06-28T02:00:00Z', venue:'Arrowhead Stadium', city:'Kansas City' },
-  { group:'J', md:3, home:'Jordan',    away:'Argentina', kickoff:'2026-06-28T02:00:00Z', venue:'AT&T Stadium',      city:'Arlington' },
-
-  // ── Group K ─────────────────────────────────────────────────────────────────
-  { group:'K', md:1, home:'Portugal',   away:'DR Congo',   kickoff:'2026-06-17T17:00:00Z', venue:'NRG Stadium',           city:'Houston' },
-  { group:'K', md:1, home:'Uzbekistan', away:'Colombia',   kickoff:'2026-06-18T02:00:00Z', venue:'Estadio Azteca',        city:'Mexico City' },
-  { group:'K', md:2, home:'Portugal',   away:'Uzbekistan', kickoff:'2026-06-23T17:00:00Z', venue:'NRG Stadium',           city:'Houston' },
-  { group:'K', md:2, home:'Colombia',   away:'DR Congo',   kickoff:'2026-06-24T02:00:00Z', venue:'Estadio Akron',         city:'Zapopan' },
-  { group:'K', md:3, home:'Colombia',   away:'Portugal',   kickoff:'2026-06-27T23:30:00Z', venue:'Hard Rock Stadium',     city:'Miami Gardens' },
-  { group:'K', md:3, home:'DR Congo',   away:'Uzbekistan', kickoff:'2026-06-27T23:30:00Z', venue:'Mercedes-Benz Stadium', city:'Atlanta' },
-
-  // ── Group L ─────────────────────────────────────────────────────────────────
-  { group:'L', md:1, home:'England', away:'Croatia', kickoff:'2026-06-17T20:00:00Z', venue:'AT&T Stadium',            city:'Arlington' },
-  { group:'L', md:1, home:'Ghana',   away:'Panama',  kickoff:'2026-06-17T23:00:00Z', venue:'BMO Field',               city:'Toronto' },
-  { group:'L', md:2, home:'England', away:'Ghana',   kickoff:'2026-06-23T20:00:00Z', venue:'Gillette Stadium',        city:'Foxborough' },
-  { group:'L', md:2, home:'Panama',  away:'Croatia', kickoff:'2026-06-23T23:00:00Z', venue:'BMO Field',               city:'Toronto' },
-  { group:'L', md:3, home:'Panama',  away:'England', kickoff:'2026-06-27T21:00:00Z', venue:'MetLife Stadium',         city:'East Rutherford' },
-  { group:'L', md:3, home:'Croatia', away:'Ghana',   kickoff:'2026-06-27T21:00:00Z', venue:'Lincoln Financial Field', city:'Philadelphia' },
-];
+// WC_SCHEDULE imported from core/config/footballConfig — single source of truth.
 
 // ESPN undocumented JSON endpoints — no key required
 const ESPN_SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard';
@@ -2990,20 +2918,15 @@ function simulateTournamentReach(n = 10000, liveGroups = null) {
     return k - 1;
   }
 
-  // Simulate a single knockout match. Returns winner name.
-  // If 90-min result is a draw, use strength-weighted penalty coin flip.
+  // Simulate a single knockout match — uses full wcLambdas (host boost + confed + ELO)
   function knockoutMatch(teamA, teamB) {
-    const BASE_LAMBDA = 1.30;
-    const sA = wcStrength(teamA);
-    const sB = wcStrength(teamB);
-    const diff = (sA - sB) / 400;
-    const lA = Math.max(0.3, BASE_LAMBDA * Math.exp( diff * 1.1));
-    const lB = Math.max(0.3, BASE_LAMBDA * Math.exp(-diff * 1.1));
+    const { lH: lA, lA: lB } = wcLambdas(teamA, teamB);
     const gA = poissonDraw(lA);
     const gB = poissonDraw(lB);
     if (gA > gB) return teamA;
     if (gB > gA) return teamB;
-    // Penalties — slight strength bias
+    // Penalties — strength-weighted coin flip
+    const sA = wcStrength(teamA), sB = wcStrength(teamB);
     return Math.random() < sA / (sA + sB) ? teamA : teamB;
   }
 
@@ -3017,11 +2940,7 @@ function simulateTournamentReach(n = 10000, liveGroups = null) {
     for (let i = 0; i < teams.length; i++) {
       for (let j = i + 1; j < teams.length; j++) {
         const tA = teams[i], tB = teams[j];
-        const BASE_LAMBDA = 1.30;
-        const sA = wcStrength(tA), sB = wcStrength(tB);
-        const diff = (sA - sB) / 400;
-        const lA = Math.max(0.3, BASE_LAMBDA * Math.exp( diff * 1.1));
-        const lB = Math.max(0.3, BASE_LAMBDA * Math.exp(-diff * 1.1));
+        const { lH: lA, lA: lB } = wcLambdas(tA, tB);
         const gA = poissonDraw(lA), gB = poissonDraw(lB);
         if (gA > gB) { pts[tA] += 3; }
         else if (gA < gB) { pts[tB] += 3; }
@@ -3156,16 +3075,7 @@ const INTL_RESULTS_URL = 'https://raw.githubusercontent.com/martj42/internationa
 let _intlResultsCache   = null;
 let _intlResultsExpires = 0;
 
-// Name aliases: our team name → martj42 dataset spelling
-const MARTJ42_ALIAS = {
-  'USA':                    'United States',
-  'Trinidad & Tobago':      'Trinidad and Tobago',
-  'Bosnia & Herzegovina':   'Bosnia and Herzegovina',
-  'Curaçao':                'Curacao',
-  "Côte d'Ivoire":          'Ivory Coast',
-  'Cabo Verde':             'Cape Verde',
-  'DR Congo':               'DR Congo',  // martj42 uses this exact name
-};
+// MARTJ42_ALIAS imported from core/config/footballConfig — single source of truth.
 function toMartj42(name) { return MARTJ42_ALIAS[name] ?? name; }
 
 async function getIntlResults() {
@@ -3197,9 +3107,11 @@ async function getIntlResults() {
     }).filter(Boolean);
     _intlResultsCache   = parsed;
     _intlResultsExpires = Date.now() + 24 * 60 * 60 * 1000;
+    failures.recordSuccess('WC_ELO', 'martj42 CSV fetch');
     console.log(`[IntlResults] Loaded ${parsed.length} matches from martj42 dataset`);
     return parsed;
   } catch (err) {
+    failures.recordFailure('WC_ELO', 'martj42 CSV fetch', err);
     console.warn('[IntlResults] Fetch failed:', err.message);
     return _intlResultsCache ?? [];
   }
@@ -3211,59 +3123,131 @@ async function getIntlResults() {
 
 let _dynamicElo = null; // populated at startup
 
-function kFactor(tournament = '') {
+// K-factor weighted by tournament importance + time decay (recent matches matter more)
+// Tiers:
+//   60 — World Cup (the gold standard)
+//   52 — UEFA Euro / Copa América (genuinely elite cross-continental competition)
+//   45 — UEFA Nations League (competitive European round-robin)
+//   38 — Africa Cup of Nations / Asian Cup / CONCACAF Gold Cup (regional, weaker avg quality)
+//   36 — World Cup qualification (mixed; broad range of team quality)
+//   20 — Friendlies
+//   30 — anything else (tournaments, invitational cups etc.)
+function kFactor(tournament = '', date = '') {
   const t = tournament.toLowerCase();
-  if (t.includes('world cup') && !t.includes('qualif')) return 60;
-  if (t.includes('copa america') || t.includes('gold cup') ||
-      t.includes('africa cup') || t.includes('african cup') ||
-      t.includes('asian cup') || t.includes('uefa nations league')) return 50;
-  if (t.includes('qualif') || t.includes('qualifier') ||
-      t.includes('nations league') || t.includes('concacaf nations')) return 40;
-  if (t.includes('friendly') || t.includes('friendlies')) return 20;
-  return 35;
-}
-
-function buildDynamicElo(results) {
-  // Only use matches from 2018 onwards so ratings reflect modern teams,
-  // not squads from a decade ago. All 48 WC nations will have played since then.
-  const START = '2018-01-01';
-  const ratings = {};
-
-  const recent = results
-    .filter(r => r.date >= START)
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  for (const { home, away, homeScore, awayScore, tournament } of recent) {
-    if (!ratings[home]) ratings[home] = 1500;
-    if (!ratings[away]) ratings[away] = 1500;
-
-    const rH = ratings[home];
-    const rA = ratings[away];
-    const expH = 1 / (1 + Math.pow(10, (rA - rH) / 400));
-    const K = kFactor(tournament);
-
-    let actH;
-    if (homeScore > awayScore) actH = 1;
-    else if (homeScore < awayScore) actH = 0;
-    else actH = 0.5;
-
-    ratings[home] = rH + K * (actH - expH);
-    ratings[away] = rA + K * ((1 - actH) - (1 - expH));
+  let K;
+  if (t.includes('world cup') && !t.includes('qualif')) {
+    K = 60;
+  } else if (t.includes('uefa euro') || t.includes('european championship') ||
+             t.includes('euro 20') || t.includes('copa am')) {
+    // UEFA Euro & Copa América — highest-quality continental tournaments
+    K = 52;
+  } else if (t.includes('uefa nations league')) {
+    // Competitive UEFA round-robin — respectable but below a championship
+    K = 45;
+  } else if (t.includes('africa cup') || t.includes('african cup') || t.includes('afcon') ||
+             t.includes('asian cup') || t.includes('afc asian') ||
+             t.includes('gold cup') || t.includes('concacaf nations') ||
+             t.includes('nations league')) {
+    // Regional continental cups — lower average team quality than EURO / Copa
+    K = 38;
+  } else if (t.includes('qualif') || t.includes('qualifier')) {
+    // WC qualifiers — value varies hugely by zone; conservative mid-weight
+    K = 36;
+  } else if (t.includes('friendly') || t.includes('friendlies')) {
+    K = 20;
+  } else {
+    K = 30;
   }
 
-  return ratings;
+  // Time decay — older matches have less impact on current ratings
+  if (date) {
+    const ageDays = (Date.now() - new Date(date).getTime()) / 86400000;
+    if (ageDays > 1095) K *= 0.35;      // 3+ years old (e.g. 2022 WC spikes)
+    else if (ageDays > 730) K *= 0.55;  // 2–3 years old
+    else if (ageDays > 365) K *= 0.78;  // 1–2 years old
+    // < 1 year: full K
+  }
+  return K;
+}
+
+// CONFED_ELO_CREDIBILITY — historical static credibility blend.
+// Replaced by adaptive alpha (clamp(n/25, 0.15, 0.85)) in core/footballEngine/elo.js.
+// Not applied at runtime. Retained in core/config/footballConfig.js for documentation.
+
+// ─── WC prior ELO lookup (used by buildDynamicElo and wcStrength fallback) ────
+function _wcPriorElo(teamName) {
+  if (FIFA_STRENGTH[teamName] != null) return FIFA_STRENGTH[teamName];
+  const key = Object.keys(FIFA_STRENGTH).find(k =>
+    k.toLowerCase() === teamName.toLowerCase() ||
+    teamName.toLowerCase().includes(k.toLowerCase()) ||
+    k.toLowerCase().includes(teamName.toLowerCase())
+  );
+  return key ? FIFA_STRENGTH[key] : 1500;
+}
+
+// ─── WC confederation lookup (martj42 name → confederation) ──────────────────
+function _wcTeamConfed(martj42Name) {
+  const ourName = Object.entries(MARTJ42_ALIAS).find(([, v]) => v === martj42Name)?.[0] ?? martj42Name;
+  return WC_CONFEDERATION[ourName] ?? WC_CONFEDERATION[martj42Name] ?? null;
+}
+
+// buildDynamicElo now delegates to core calculateEloRatings (worldcup mode).
+// All WC-specific parameters are injected — core has no hard dependencies on
+// server.js constants.
+function buildDynamicElo(results) {
+  return calculateEloRatings({
+    matches: results,
+    mode: 'worldcup',
+    worldcupOpts: {
+      kFactorFn:  kFactor,
+      priorEloFn: _wcPriorElo,
+      confederationCtx: {
+        getConfed:             _wcTeamConfed,
+        crossConfedIntraWeight: 0.87,
+        alphaParams: { divisor: 25, min: 0.15, cap: 0.85 },
+      },
+      startDate: '2018-01-01',
+    },
+  });
 }
 
 async function initDynamicElo() {
   try {
     const results = await getIntlResults();
+    if (!results || results.length === 0) {
+      // Hard failure: no data at all — log and flag, do NOT silently continue
+      failures.recordFailure('WC_ELO', 'martj42 CSV', new Error('empty dataset returned'));
+      logger.error({
+        system: 'WC', stage: 'elo',
+        message: '[DynamicElo] martj42 dataset returned 0 results — ELO init aborted',
+        warnings: ['wcStrength() will fall back to FIFA_STRENGTH priors for all teams'],
+        errors:   ['empty dataset — check INTL_RESULTS_URL and network connectivity'],
+      });
+      return;   // _dynamicElo stays null → wcStrength() falls back to FIFA_STRENGTH
+    }
     _dynamicElo = buildDynamicElo(results);
+    // Clear frozen pre-tournament predictions so they regenerate with updated model
+    _wcPrePredCache = null;
+    failures.recordSuccess('WC_ELO', 'martj42 CSV');
     const top5 = Object.entries(_dynamicElo)
       .sort((a, b) => b[1] - a[1]).slice(0, 5)
       .map(([t, r]) => `${t} ${Math.round(r)}`).join(', ');
-    console.log(`[DynamicElo] Built from ${results.length} intl results. Top 5: ${top5}`);
+    logger.info({
+      system: 'WC', stage: 'elo',
+      message: `[DynamicElo] Built from ${results.length} intl results. Top 5: ${top5}`,
+      metrics: { matchCount: results.length, top5 },
+    });
   } catch (err) {
-    console.warn('[DynamicElo] Init failed, falling back to hardcoded:', err.message);
+    // Explicit failure — record in registry and log structured warning.
+    // _dynamicElo remains null → wcStrength() falls back to FIFA_STRENGTH priors.
+    // This is an EXPECTED degradation path, not a silent bug.
+    failures.recordFailure('WC_ELO', 'martj42 CSV', err);
+    logger.warn({
+      system:   'WC', stage: 'elo',
+      message:  '[DynamicElo] Init failed — falling back to FIFA_STRENGTH priors',
+      warnings: ['All WC predictions will use hardcoded prior ELOs until next successful init'],
+      errors:   [err.message],
+    });
   }
 }
 
@@ -3392,10 +3376,9 @@ const WC_STRIKERS = [
 ];
 
 function computeGoldenBoot(reach) {
-  const BASE_LAMBDA = 1.30;
   return WC_STRIKERS.map(s => {
-    const str      = wcStrength(s.team);
-    const lambda   = Math.max(0.3, BASE_LAMBDA * Math.exp((str - 1500) / 400 * 1.1));
+    // Use wcLambdas vs average team (1500 ELO) to get team's typical attack lambda
+    const { lH: lambda } = wcLambdas(s.team, '__avg__');
     const r        = reach[s.team] ?? {};
     const expGames = 3 + (r.pAdvance ?? 0) + (r.pR16 ?? 0) + (r.pQF ?? 0) + (r.pSF ?? 0) + (r.pFinal ?? 0);
     const xGoals   = +(lambda * expGames * s.share).toFixed(2);
@@ -3416,12 +3399,20 @@ function _loadPrePredFromDisk() {
   try {
     if (fs.existsSync(WC_PRE_PRED_FILE)) {
       const raw = JSON.parse(fs.readFileSync(WC_PRE_PRED_FILE, 'utf8'));
+      // Guard: discard disk cache if model version doesn't match.
+      // (Same check Supabase loader applies — was previously missing here.)
+      if (raw.modelVersion !== WC_MODEL_VERSION) {
+        console.log(`[WC] Disk cache is model ${raw.modelVersion ?? 'unknown'}, current is ${WC_MODEL_VERSION} — discarding`);
+        return null;
+      }
       console.log(`[WC] Loaded frozen pre-tournament predictions from disk (saved ${raw.savedAt})`);
       return raw;
     }
   } catch (err) { console.warn('[WC] Could not load pre-pred file:', err.message); }
   return null;
 }
+
+// WC_MODEL_VERSION imported from core/state/modelState — single source of truth.
 
 async function initWcPrePredictions() {
   if (!supabase) return; // will fall through to disk/build in getPrePredictions
@@ -3432,6 +3423,11 @@ async function initWcPrePredictions() {
       .eq('id', 1)
       .maybeSingle();
     if (!error && data) {
+      // Discard stale cache if model version doesn't match
+      if (data.data?.modelVersion !== WC_MODEL_VERSION) {
+        console.log(`[WC] Supabase cache is model ${data.data?.modelVersion ?? 'unknown'}, current is ${WC_MODEL_VERSION} — discarding`);
+        return;
+      }
       _wcPrePredCache = { savedAt: data.saved_at, ...data.data };
       console.log(`[WC] Loaded frozen pre-tournament predictions from Supabase (saved ${data.saved_at})`);
     }
@@ -3484,9 +3480,7 @@ function _buildPrePredictions() {
       for (let i = 0; i < teams.length; i++) {
         for (let j = i + 1; j < teams.length; j++) {
           const tA = teams[i], tB = teams[j];
-          const diff = (wcStrength(tA) - wcStrength(tB)) / 400;
-          const lA   = Math.max(0.3, 1.30 * Math.exp( diff * 1.1));
-          const lB   = Math.max(0.3, 1.30 * Math.exp(-diff * 1.1));
+          const { lH: lA, lA: lB } = wcLambdas(tA, tB);
           const gA   = poissonDrawLocal(lA);
           const gB   = poissonDrawLocal(lB);
           if      (gA > gB) { simPts[tA] += 3; }
@@ -3535,7 +3529,7 @@ function getPrePredictions() {
   if (_wcPrePredCache) return _wcPrePredCache;
   // First ever call — compute, cache, and persist
   const built = _buildPrePredictions();
-  _wcPrePredCache = { savedAt: new Date().toISOString(), ...built };
+  _wcPrePredCache = { savedAt: new Date().toISOString(), modelVersion: WC_MODEL_VERSION, ...built };
   const { savedAt, ...dataToStore } = _wcPrePredCache;
   if (supabase) {
     supabase
@@ -3611,10 +3605,15 @@ app.get('/api/wc/tournament', async (req, res) => {
       for (const m of matches) {
         const hStr = wcStrength(m.home);
         const aStr = wcStrength(m.away);
-        if (hStr === aStr) continue;
+        // Require a meaningful ELO gap before labelling a team as underdog.
+        // <60 points ≈ coin-flip — not a genuine upset opportunity.
+        // (Previously only skipped hStr === aStr, causing Canada/Switzerland 36%/36%
+        // to appear as an upset alert despite tied win probabilities.)
+        const eloGap = Math.abs(hStr - aStr);
+        if (eloGap < 60) continue;
         const isHomeUnderdog = hStr < aStr;
         const underdogWin    = isHomeUnderdog ? m.homeWin : m.awayWin;
-        if (underdogWin >= 0.30) {
+        if (underdogWin >= 0.33) {
           upsetMatches.push({
             group:        letter,
             home:         m.home,
@@ -3708,6 +3707,257 @@ app.get('/api/wc/tournament', async (req, res) => {
     console.error('[WC] Tournament fetch failed:', err.message);
     res.json({ phase: 'PRE_TOURNAMENT', groups: {}, groupFixtures: [], knockoutFixtures: [], hardcodedGroups: WC_GROUPS, wcSchedule: WC_SCHEDULE, hasLiveData: false });
   }
+});
+
+// GET /api/wc/elo-rankings — all 48 WC teams ranked by dynamic ELO
+app.get('/api/wc/elo-rankings', (req, res) => {
+  const allTeams = Object.values(WC_GROUPS).flat();
+  const ranked = allTeams
+    .map(team => ({
+      team,
+      elo:         Math.round(wcStrength(team)),
+      confederation: WC_CONFEDERATION[team] ?? 'Unknown',
+      hostNation:  WC_HOST_NATIONS.has(team) || WC_HOST_NATIONS.has(toMartj42(team)),
+    }))
+    .sort((a, b) => b.elo - a.elo)
+    .map((t, i) => ({ ...t, rank: i + 1 }));
+  res.json({ rankings: ranked, usingDynamicElo: !!_dynamicElo });
+});
+
+// ─── Model Diagnostics ───────────────────────────────────────────────────────
+
+// Lightweight in-memory cache for diagnostics (recompute at most every 5 min)
+let _diagnosticsCache   = null;
+let _diagnosticsCacheAt = 0;
+const DIAGNOSTICS_TTL   = TTL.DIAGNOSTICS;  // from modelState
+
+// Diagnostics snapshot — now routed through cacheManager for unified persistence.
+function loadDiagnosticsSnapshot() {
+  return cache.loadSlot('diagnostics-snapshot');
+}
+function saveDiagnosticsSnapshot(rankings) {
+  const snap = rankings.map(r => ({ team: r.team, elo: r.elo, rank: r.rank }));
+  cache.persistSlot('diagnostics-snapshot', snap);
+}
+
+// GET /api/model-diagnostics
+app.get('/api/model-diagnostics', (req, res) => {
+  const now = Date.now();
+  if (_diagnosticsCache && (now - _diagnosticsCacheAt) < DIAGNOSTICS_TTL) {
+    return res.json(_diagnosticsCache);
+  }
+
+  const allTeams = Object.values(WC_GROUPS).flat();
+  const rankings = allTeams
+    .map(team => ({
+      team,
+      elo:           Math.round(wcStrength(team)),
+      confederation: WC_CONFEDERATION[team] ?? 'Unknown',
+      hostNation:    WC_HOST_NATIONS.has(team) || WC_HOST_NATIONS.has(toMartj42(team)),
+    }))
+    .sort((a, b) => b.elo - a.elo)
+    .map((t, i) => ({ ...t, rank: i + 1 }));
+
+  const snapshot     = loadDiagnosticsSnapshot();
+  const report       = runDiagnostics(rankings, snapshot);
+  const calibration  = generateCalibrationReport(report);
+
+  // Save current rankings as the new snapshot reference
+  saveDiagnosticsSnapshot(rankings);
+
+  const fullResponse  = { ...report, calibration };
+  _diagnosticsCache   = fullResponse;
+  _diagnosticsCacheAt = now;
+
+  res.json(fullResponse);
+});
+
+// ─── Model Monitor — live prediction-outcome tracking ─────────────────────────
+// In-memory log of settled prediction outcomes. On startup the log is seeded
+// from a local JSON file (monitor-log.json) so history survives restarts.
+// The log is capped at MAX_MONITOR_LOG entries to prevent unbounded growth.
+//
+// Integration:
+//   • POST /api/monitor/record-outcome — called after a match settles
+//   • GET  /api/monitor/report         — full health report for the dashboard
+//   • GET  /api/monitor/report/:system — health report filtered to PL|FD|WC
+
+const MAX_MONITOR_LOG      = 5_000;               // keep last 5k settled matches
+const MONITOR_REPORT_TTL   = TTL.MONITOR_REPORT;   // from modelState
+
+let _monitorLog        = [];
+let _monitorReportCache = null;
+let _monitorReportAt    = 0;
+
+// ── Load persisted log on startup (via cacheManager) ────────────────────────
+(function loadMonitorLog() {
+  try {
+    const raw = cache.loadSlot('monitor-log');
+    if (Array.isArray(raw)) {
+      _monitorLog = raw.slice(-MAX_MONITOR_LOG);
+      console.log(`[monitor] loaded ${_monitorLog.length} settled outcomes from disk`);
+    }
+  } catch (err) {
+    console.warn('[monitor] could not load monitor-log.json:', err.message);
+  }
+})();
+
+function persistMonitorLog() {
+  cache.persistSlot('monitor-log', _monitorLog.slice(-MAX_MONITOR_LOG));
+}
+
+function invalidateMonitorCache() {
+  _monitorReportCache = null;
+  _monitorReportAt    = 0;
+}
+
+/**
+ * POST /api/monitor/record-outcome
+ *
+ * Body (JSON):
+ * {
+ *   matchId:   "pl-2024-W29-arsenal-chelsea",
+ *   system:    "PL" | "FD" | "WC",
+ *   predicted: { homeWinProb, drawProb, awayWinProb, expectedGoalsHome?, expectedGoalsAway? },
+ *   actual:    { homeGoals, awayGoals, result? },
+ *   context?:  { homeTeam, awayTeam, kickoffTime, eloHome?, eloAway? },
+ *   timestamp?: "2025-03-15T15:00:00Z"
+ * }
+ *
+ * Returns: { ok: true, n: <total settled count> }
+ */
+app.post('/api/monitor/record-outcome', (req, res) => {
+  const { entry, error } = modelMonitor.recordPredictionOutcome(req.body ?? {});
+  if (error) return res.status(400).json({ error });
+
+  // Prevent duplicate matchId entries
+  const existing = _monitorLog.findIndex(e => e.matchId === entry.matchId && e.system === entry.system);
+  if (existing >= 0) {
+    _monitorLog[existing] = entry;   // update in place (late result correction)
+  } else {
+    _monitorLog.push(entry);
+    if (_monitorLog.length > MAX_MONITOR_LOG) _monitorLog.shift();
+  }
+
+  invalidateMonitorCache();
+  persistMonitorLog();   // write-through; negligible cost for sporadic updates
+
+  res.json({ ok: true, n: _monitorLog.length });
+});
+
+/**
+ * POST /api/monitor/record-outcomes   (batch variant)
+ *
+ * Body: { outcomes: Array<outcome> }
+ * Returns: { ok: true, accepted: N, rejected: [{index, error}] }
+ */
+app.post('/api/monitor/record-outcomes', (req, res) => {
+  const { outcomes } = req.body ?? {};
+  if (!Array.isArray(outcomes)) return res.status(400).json({ error: 'outcomes[] required' });
+
+  let accepted = 0;
+  const rejected = [];
+
+  for (let i = 0; i < outcomes.length; i++) {
+    const { entry, error } = modelMonitor.recordPredictionOutcome(outcomes[i]);
+    if (error) { rejected.push({ index: i, error }); continue; }
+
+    const existing = _monitorLog.findIndex(
+      e => e.matchId === entry.matchId && e.system === entry.system
+    );
+    if (existing >= 0) _monitorLog[existing] = entry;
+    else _monitorLog.push(entry);
+    accepted++;
+  }
+
+  // Trim to cap
+  if (_monitorLog.length > MAX_MONITOR_LOG) {
+    _monitorLog = _monitorLog.slice(-MAX_MONITOR_LOG);
+  }
+  if (accepted > 0) {
+    invalidateMonitorCache();
+    persistMonitorLog();
+  }
+
+  res.json({ ok: true, accepted, rejected });
+});
+
+/**
+ * GET /api/monitor/report[/:system]
+ *
+ * Returns a full health report for all pipelines or a single one.
+ * Cached for MONITOR_REPORT_TTL to avoid recomputing on every poll.
+ *
+ * Optional query param: ?days=28  — recent window size (default 28)
+ */
+app.get('/api/monitor/report/:system?', (req, res) => {
+  const { system } = req.params;
+  const days       = Math.max(1, parseInt(req.query.days, 10) || 28);
+
+  if (system && !['PL', 'FD', 'WC'].includes(system)) {
+    return res.status(400).json({ error: 'system must be PL, FD, or WC' });
+  }
+
+  const now = Date.now();
+  if (_monitorReportCache && (now - _monitorReportAt) < MONITOR_REPORT_TTL && !system) {
+    return res.json(_monitorReportCache);
+  }
+
+  const entries = system ? _monitorLog.filter(e => e.system === system) : _monitorLog;
+
+  // Build ELO snapshots from in-memory WC ELO for the trend tracker.
+  // Only populated once WC data has been initialised.
+  const eloSnapshots = [];
+  try {
+    if (typeof wcStrength === 'function') {
+      const allTeams = Object.values(WC_GROUPS ?? {}).flat();
+      const ratingMap = {};
+      for (const t of allTeams) ratingMap[t] = wcStrength(t);
+      const snap = modelMonitor.snapshotEloDistribution(ratingMap, 'WC');
+      if (snap.n > 0) eloSnapshots.push(snap);
+    }
+  } catch { /* WC data not yet loaded */ }
+
+  const report = modelMonitor.generateMonitorReport(entries, {
+    recentWindowDays: days,
+    eloSnapshots,
+  });
+
+  if (!system) {
+    _monitorReportCache = report;
+    _monitorReportAt    = now;
+  }
+
+  res.json(report);
+});
+
+/**
+ * GET /api/monitor/log
+ *
+ * Returns the raw settled-outcome log (last N entries).
+ * Useful for ad-hoc inspection. Default limit: 100.
+ */
+app.get('/api/monitor/log', (req, res) => {
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+  res.json({
+    n:       _monitorLog.length,
+    entries: _monitorLog.slice(-limit),
+  });
+});
+
+/**
+ * GET /api/system-status
+ *
+ * Returns the failure-registry status for all external data systems.
+ * Useful for ops dashboards, alerting, and health checks.
+ */
+app.get('/api/system-status', (_req, res) => {
+  res.json({
+    ...failures.getAllSystemStatus(),
+    cache: cache.getCacheHealth(),
+    modelVersion: WC_MODEL_VERSION,
+    dynamicEloLoaded: !!_dynamicElo,
+  });
 });
 
 // GET /api/wc/predict?home=Argentina&away=France
@@ -4040,95 +4290,15 @@ app.get('/api/fd/results', async (req, res) => {
 // ─── FD prediction helpers ────────────────────────────────────────────────────
 
 // Build form data from normalised FD matches (same shape as PL buildFormData)
+// buildFdFormData — now delegates to core buildFormStats with FD accessors.
 function buildFdFormData(allMatches) {
-  const teamIds = new Set();
-  for (const m of allMatches) {
-    teamIds.add(m.homeTeam.id);
-    teamIds.add(m.awayTeam.id);
-  }
-
-  const wavg = (games, goalsFor, goalsAgainst) => {
-    if (!games.length) return { sc: 0, co: 0 };
-    const ws   = FORM_WEIGHTS.slice(0, games.length);
-    const wSum = ws.reduce((a, b) => a + b, 0) || 1;
-    let sc = 0, co = 0;
-    for (let i = 0; i < games.length; i++) {
-      const w = (FORM_WEIGHTS[i] ?? 0) / wSum;
-      sc += goalsFor(games[i])    * w;
-      co += goalsAgainst(games[i]) * w;
-    }
-    return { sc, co };
-  };
-
-  const formMap = {};
-
-  for (const teamId of teamIds) {
-    const allPlayed = allMatches
-      .filter(m => m.finished && m.homeGoals != null &&
-        (m.homeTeam.id === teamId || m.awayTeam.id === teamId))
-      .sort((a, b) => new Date(b.kickoffTime) - new Date(a.kickoffTime));
-
-    const homePlayed = allPlayed.filter(m => m.homeTeam.id === teamId).slice(0, 5);
-    const awayPlayed = allPlayed.filter(m => m.awayTeam.id === teamId).slice(0, 5);
-
-    const homeRecent = wavg(homePlayed, m => m.homeGoals ?? 0, m => m.awayGoals ?? 0);
-    const awayRecent = wavg(awayPlayed, m => m.awayGoals ?? 0, m => m.homeGoals ?? 0);
-
-    let seasonHomeScored = 0, seasonHomeConceded = 0;
-    let seasonAwayScored = 0, seasonAwayConceded = 0;
-    for (const m of allPlayed) {
-      if (m.homeTeam.id === teamId) {
-        seasonHomeScored   += m.homeGoals ?? 0;
-        seasonHomeConceded += m.awayGoals ?? 0;
-      } else {
-        seasonAwayScored   += m.awayGoals ?? 0;
-        seasonAwayConceded += m.homeGoals ?? 0;
-      }
-    }
-    const allHome = allPlayed.filter(m => m.homeTeam.id === teamId);
-    const allAway = allPlayed.filter(m => m.awayTeam.id === teamId);
-
-    const mixed = allPlayed.slice(0, 5);
-    const mixedStats = wavg(
-      mixed,
-      m => (m.homeTeam.id === teamId ? m.homeGoals : m.awayGoals) ?? 0,
-      m => (m.homeTeam.id === teamId ? m.awayGoals : m.homeGoals) ?? 0,
-    );
-
-    formMap[teamId] = {
-      homeScored:    homeRecent.sc,
-      homeConceded:  homeRecent.co,
-      homeGames:     homePlayed.length,
-      awayScored:    awayRecent.sc,
-      awayConceded:  awayRecent.co,
-      awayGames:     awayPlayed.length,
-      seasonHomeScored,  seasonHomeConceded,  seasonHomeGames: allHome.length,
-      seasonAwayScored,  seasonAwayConceded,  seasonAwayGames: allAway.length,
-      seasonScored:   seasonHomeScored + seasonAwayScored,
-      seasonConceded: seasonHomeConceded + seasonAwayConceded,
-      seasonGames:    allPlayed.length,
-      scored:   mixedStats.sc,
-      conceded: mixedStats.co,
-      games:    1,
-      recentResults: mixed.map(m => ({
-        homeGoals: m.homeTeam.id === teamId ? m.homeGoals : m.awayGoals,
-        awayGoals: m.homeTeam.id === teamId ? m.awayGoals : m.homeGoals,
-      })),
-    };
-  }
-
-  return formMap;
+  const teamIds = [...new Set(allMatches.flatMap(m => [m.homeTeam.id, m.awayTeam.id]))];
+  return buildFormStats(allMatches, teamIds, FD_ACCESSORS, FORM_WEIGHTS);
 }
 
+// calcFdLeagueAverages — now delegates to core with FD accessors.
 function calcFdLeagueAverages(allMatches) {
-  const finished = allMatches.filter(m => m.finished && m.homeGoals != null);
-  if (!finished.length) return { home: 1.52, away: 1.18 };
-  const totalHome = finished.reduce((s, m) => s + m.homeGoals, 0);
-  const totalAway = finished.reduce((s, m) => s + m.awayGoals, 0);
-  return {
-    home: totalHome / finished.length,
-    away: totalAway / finished.length,
-  };
+  return calcMatchAverages(allMatches, FD_ACCESSORS);
 }
 
 // Convert normalised FD match shape → FPL-like shape for buildRollingRatings / buildEloRatings
@@ -4187,6 +4357,11 @@ app.get('/api/fd/predictions', async (req, res) => {
     const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
     const eloRatings     = buildEloRatings(fplShape);
 
+    const fdHomeRestDays = getFdRestDays(match.homeTeam.id, match.kickoffTime, allMatches);
+    const fdAwayRestDays = getFdRestDays(match.awayTeam.id, match.kickoffTime, allMatches);
+    const fdTeamAdvFactors = buildTeamHomeAdvantage(fplShape);
+    const fdTeamHomeAdvFactor = fdTeamAdvFactors[String(match.homeTeam.id)] ?? 1.0;
+
     const prediction = predict({
       homeTeam:      { id: match.homeTeam.id, name: match.homeTeam.name },
       awayTeam:      { id: match.awayTeam.id, name: match.awayTeam.name },
@@ -4200,6 +4375,9 @@ app.get('/api/fd/predictions', async (req, res) => {
       awayInjuries:  0,
       rollingRatings,
       eloRatings,
+      homeRestDays:     fdHomeRestDays,
+      awayRestDays:     fdAwayRestDays,
+      teamHomeAdvFactor: fdTeamHomeAdvFactor,
     });
 
     const result = {
@@ -4422,6 +4600,7 @@ async function preFillPredictions() {
       if (xgRaw[usName]) xGData[team.id] = xgRaw[usName];
     }
 
+    const plTeamAdvFactors = buildTeamHomeAdvantage(allFixtures);
     const upcoming = allFixtures.filter(f => !isFixtureSettled(f) && f.kickoff_time);
     for (const fix of upcoming) {
       const alreadyTracked = history.predictions.find(
@@ -4434,6 +4613,9 @@ async function preFillPredictions() {
       if (!homeTeam || !awayTeam) continue;
 
       const marketOdds = oddsMap[`${homeTeam.name}_${awayTeam.name}`] ?? null;
+      const plHomeRest = getRestDays(homeTeam.id, fix.kickoff_time, allFixtures);
+      const plAwayRest = getRestDays(awayTeam.id, fix.kickoff_time, allFixtures);
+      const plHomeAdv  = plTeamAdvFactors[String(homeTeam.id)] ?? 1.0;
 
       const prediction = predict({
         homeTeam:      { id: homeTeam.id, name: homeTeam.name },
@@ -4448,6 +4630,9 @@ async function preFillPredictions() {
         awayInjuries:  0,
         rollingRatings,
         eloRatings,
+        homeRestDays:     plHomeRest,
+        awayRestDays:     plAwayRest,
+        teamHomeAdvFactor: plHomeAdv,
       });
 
       history.predictions.push({
@@ -4494,6 +4679,7 @@ async function preFillPredictions() {
       const formData       = buildFdFormData(allMatches);
       const rollingRatings = buildRollingRatings(fplShape, leagueAvg.home, leagueAvg.away);
       const eloRatings     = buildEloRatings(fplShape);
+      const fdBulkAdvFactors = buildTeamHomeAdvantage(fplShape);
 
       const upcoming = allMatches.filter(m => !m.finished && m.kickoffTime);
       for (const match of upcoming) {
@@ -4501,6 +4687,10 @@ async function preFillPredictions() {
           p => p.fixtureId === match.id && p.league === leagueId
         );
         if (alreadyTracked) continue;
+
+        const bulkHomeRest = getFdRestDays(match.homeTeam.id, match.kickoffTime, allMatches);
+        const bulkAwayRest = getFdRestDays(match.awayTeam.id, match.kickoffTime, allMatches);
+        const bulkHomeAdv  = fdBulkAdvFactors[String(match.homeTeam.id)] ?? 1.0;
 
         const prediction = predict({
           homeTeam:      { id: match.homeTeam.id, name: match.homeTeam.name },
@@ -4515,6 +4705,9 @@ async function preFillPredictions() {
           awayInjuries:  0,
           rollingRatings,
           eloRatings,
+          homeRestDays:     bulkHomeRest,
+          awayRestDays:     bulkAwayRest,
+          teamHomeAdvFactor: bulkHomeAdv,
         });
 
         history.predictions.push({

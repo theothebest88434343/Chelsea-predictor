@@ -1,5 +1,17 @@
 node_modules/
 dist/
 .env
-prediction-history-*.json
 .claude/
+
+# Runtime-generated prediction data
+prediction-history.json
+prediction-history-*.json
+market-history.json
+wc-pre-predictions.json
+
+# Runtime-generated cache / monitoring files
+monitor-log.json
+diagnostics-snapshot.json
+
+# Test suite snapshots (regenerated on --update)
+core/testing/footballRegressionSnapshots.json

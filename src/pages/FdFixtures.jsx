@@ -483,6 +483,96 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
             </div>
           )}
 
+          {/* Top scorelines — upcoming only */}
+          {pred?.topScores?.length > 0 && (
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                <BarChart2 size={13} color="var(--gold)" />
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>TOP SCORELINES</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                {pred.topScores.slice(0, 6).map(({ score, prob }) => (
+                  <div key={score} style={{
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}>
+                    <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>{score}</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{(prob * 100).toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Over / Under — upcoming only */}
+          {pred?.overUnder && (
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                <Zap size={13} color="var(--gold)" />
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>OVER / UNDER</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {[
+                  { label: 'Over 1.5', val: pred.overUnder.over15 },
+                  { label: 'Over 2.5', val: pred.overUnder.over25 },
+                  { label: 'Over 3.5', val: pred.overUnder.over35 },
+                ].map(({ label, val }) => (
+                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)', width: 56 }}>{label}</span>
+                    <div style={{ flex: 1, height: 6, background: 'var(--surface)', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${val * 100}%`, background: 'var(--gold)', borderRadius: 3 }} />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', width: 36, textAlign: 'right' }}>
+                      {(val * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Asian Handicap — upcoming only */}
+          {pred?.asianHandicap && (
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                <Activity size={13} color="var(--gold)" />
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>ASIAN HANDICAP</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {[
+                  { label: 'AH 0', home: pred.asianHandicap.level?.home, away: pred.asianHandicap.level?.away },
+                  { label: 'AH -0.5 / +0.5', home: pred.asianHandicap.homeMinus05, away: pred.asianHandicap.awayMinus05 },
+                  { label: 'AH -1.5 / +1.5', home: pred.asianHandicap.homeMinus15, away: pred.asianHandicap.awayPlus15 },
+                ].map(({ label, home, away }) => (
+                  <div key={label} style={{
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    textAlign: 'center',
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-around' }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--blue, #60a5fa)' }}>{home != null ? `${(home * 100).toFixed(0)}%` : '–'}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Home</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-muted)' }}>{away != null ? `${(away * 100).toFixed(0)}%` : '–'}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Away</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* H2H — upcoming + perspective team only */}
           {!match.finished && opponentId && (
             <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>

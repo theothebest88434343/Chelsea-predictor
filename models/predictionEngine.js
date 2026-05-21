@@ -57,31 +57,31 @@ const ELO_K        = 20;
 const ELO_HOME_ADV = 50;
 const ELO_START    = 1500;
 
+// ─── Core engine (shared math) ────────────────────────────────────────────────
+// poissonPMF and dixonColesTau are now sourced from the single shared core.
+// buildEloRatings is still exported from here for back-compat but delegates
+// to calculateEloRatings internally (see below).
+
+const {
+  poissonPMF:      _poissonPMF,
+  dixonColesTau:   _dixonColesTau,
+  calculateEloRatings,
+} = require('../core/footballEngine');
+
 // ─── Math helpers ─────────────────────────────────────────────────────────────
+// Local aliases kept so the rest of the file is unchanged.
 
-// Precompute factorials 0-9
-const FACTORIALS = [1,1,2,6,24,120,720,5040,40320,362880];
-const factorial = n => (n < FACTORIALS.length ? FACTORIALS[n] : FACTORIALS[FACTORIALS.length - 1]);
-
-function poissonProb(k, lambda) {
-  if (lambda <= 0) return k === 0 ? 1 : 0;
-  return Math.exp(-lambda) * Math.pow(lambda, k) / factorial(k);
-}
+const poissonProb    = _poissonPMF;
 
 // Clamp value to [min, max]
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 // ─── Dixon-Coles τ correction ────────────────────────────────────────────────
-// Adjusts joint probability of low-score outcomes to capture goal correlation.
-// Only cells (0,0), (1,0), (0,1), (1,1) are modified — all others τ=1.
-// rho is passed in from buildScoreMatrix — each match uses a dynamic value.
+// Delegates to core — single implementation shared with WC model.
+// rho is still passed in from buildScoreMatrix (dynamic RHO for league model).
 
 function tau(h, a, lH, lA, rho) {
-  if (h === 0 && a === 0) return 1 - rho * lH * lA;
-  if (h === 1 && a === 0) return 1 + rho * lA;
-  if (h === 0 && a === 1) return 1 + rho * lH;
-  if (h === 1 && a === 1) return 1 - rho;
-  return 1;
+  return _dixonColesTau(h, a, lH, lA, rho);
 }
 
 // Dynamic RHO: higher geometric-mean lambda → less low-score correlation → weaker correction.
@@ -129,6 +129,66 @@ function buildScoreMatrix(lH, lA) {
   }
 
   return matrix;
+}
+
+// ─── Rest days fatigue factor ─────────────────────────────────────────────────
+// Teams with shorter rest perform worse — especially noticeable below 4 days.
+// Returns a lambda multiplier < 1 for short rest, 1.0 for 5+ days.
+function restDaysFactor(days) {
+  if (days == null || days >= 5) return 1.0;
+  if (days <= 1) return 0.91;
+  if (days <= 2) return 0.94;
+  if (days <= 3) return 0.97;
+  if (days <= 4) return 0.99;
+  return 1.0;
+}
+
+// ─── Referee strictness factor ────────────────────────────────────────────────
+// Strict refs (many yellows) disrupt flow → marginally fewer goals.
+// Lenient refs → slightly more open play → marginally more goals.
+// Max effect ±3% per team. Applied equally to both sides (it's the same ref).
+function refereeFactor(refStats, leagueAvgYellows) {
+  if (!refStats || !leagueAvgYellows || leagueAvgYellows <= 0) return 1.0;
+  const ratio = refStats.yellowsPerGame / leagueAvgYellows;
+  // ratio > 1 → strict → fewer goals; ratio < 1 → lenient → more goals
+  return clamp(1 - (ratio - 1) * 0.06, 0.97, 1.03);
+}
+
+// ─── Team-specific home advantage ─────────────────────────────────────────────
+// Computes per-team home advantage relative to the league average.
+// Returns { [teamId]: factor } where factor > 1 = stronger home team than avg.
+// Minimum 4 home and 4 away games required; otherwise defaults to 1.0.
+function buildTeamHomeAdvantage(allFixtures) {
+  const teams = {};
+  for (const f of allFixtures) {
+    if (f.team_h_score == null || f.team_a_score == null) continue;
+    const hId = String(f.team_h);
+    const aId = String(f.team_a);
+    if (!teams[hId]) teams[hId] = { hGoals: 0, hGames: 0, aGoals: 0, aGames: 0 };
+    if (!teams[aId]) teams[aId] = { hGoals: 0, hGames: 0, aGoals: 0, aGames: 0 };
+    teams[hId].hGoals += f.team_h_score;
+    teams[hId].hGames++;
+    teams[aId].aGoals += f.team_a_score;
+    teams[aId].aGames++;
+  }
+
+  // League average home/away ratio
+  const vals = Object.values(teams);
+  const leagueHomeAvg = vals.reduce((s, t) => s + (t.hGames ? t.hGoals / t.hGames : 0), 0) / (vals.length || 1);
+  const leagueAwayAvg = vals.reduce((s, t) => s + (t.aGames ? t.aGoals / t.aGames : 0), 0) / (vals.length || 1);
+  const leagueRatio   = leagueAwayAvg > 0.1 ? leagueHomeAvg / leagueAwayAvg : 1.29;
+
+  const factors = {};
+  for (const [id, t] of Object.entries(teams)) {
+    if (t.hGames < 4 || t.aGames < 4) { factors[id] = 1.0; continue; }
+    const teamRatio = (t.aGoals / t.aGames) > 0.1
+      ? (t.hGoals / t.hGames) / (t.aGoals / t.aGames)
+      : leagueRatio;
+    // Factor: deviation from league norm, gently blended, capped at ±8%
+    const raw = teamRatio / leagueRatio;
+    factors[id] = clamp(0.5 + raw * 0.5, 0.92, 1.08);
+  }
+  return factors;
 }
 
 // ─── H2H modifier ─────────────────────────────────────────────────────────────
@@ -204,40 +264,15 @@ function buildRollingRatings(allFixtures, leagueAvgHome = 1.52, leagueAvgAway = 
 }
 
 // ─── ELO ratings ─────────────────────────────────────────────────────────────
-// Returns { [teamId]: eloRating } from all played fixtures, oldest first.
+// Delegates to core calculateEloRatings (league mode).
+// External interface is unchanged — returns { [teamId]: eloRating }.
 
 function buildEloRatings(allFixtures) {
-  const played = allFixtures
-    .filter(f => f.team_h_score != null && f.team_a_score != null)
-    .sort((a, b) => new Date(a.kickoff_time) - new Date(b.kickoff_time));
-
-  const elo = {};
-  const get = id => { const k = String(id); if (elo[k] == null) elo[k] = ELO_START; return elo[k]; };
-
-  for (const f of played) {
-    const hId  = String(f.team_h);
-    const aId  = String(f.team_a);
-    const hElo = get(hId) + ELO_HOME_ADV;  // home advantage baked into expected score
-    const aElo = get(aId);
-
-    const eH = 1 / (1 + Math.pow(10, (aElo - hElo) / 400));
-    const eA = 1 - eH;
-
-    const hG = f.team_h_score;
-    const aG = f.team_a_score;
-    const sH = hG > aG ? 1 : hG === aG ? 0.5 : 0;
-    const sA = 1 - sH;
-
-    // Goal-margin multiplier: draws use kMult=1, decisive results scale by log(|GD|+1).
-    // A 4-0 win (kMult≈1.61) updates ELO 61% harder than a 1-0 win (kMult≈0.69→1.0 floor).
-    const goalDiff = Math.abs(hG - aG);
-    const kMult    = goalDiff === 0 ? 1 : Math.max(1, Math.log(goalDiff + 1));
-
-    elo[hId] = (elo[hId] ?? ELO_START) + ELO_K * kMult * (sH - eH);
-    elo[aId] = (elo[aId] ?? ELO_START) + ELO_K * kMult * (sA - eA);
-  }
-
-  return elo;
+  return calculateEloRatings({
+    matches:    allFixtures,
+    mode:       'league',
+    leagueOpts: { K: ELO_K, homeAdv: ELO_HOME_ADV, startElo: ELO_START },
+  });
 }
 
 // ─── Form streak multiplier ───────────────────────────────────────────────────
@@ -270,15 +305,19 @@ function formStreakMultiplier(recentResults) {
 function calculateLambdas({
   homeTeam,
   awayTeam,
-  leagueAvgHome  = 1.52,
-  leagueAvgAway  = 1.18,
-  xGData         = {},   // { [teamId]: { homeXG, awayXG, seasonXG, homeXGA, awayXGA, seasonXGA } }
-  formData       = {},   // { [teamId]: { scored, conceded, games } } — season averages
-  h2hData        = [],
-  homeInjuries   = 0,    // count of key players missing
-  awayInjuries   = 0,
-  rollingRatings = {},   // { ratings: { [teamId]: { attack, defense } }, homeAdv }
-  eloRatings     = {},   // { [teamId]: eloRating }
+  leagueAvgHome    = 1.52,
+  leagueAvgAway    = 1.18,
+  xGData           = {},   // { [teamId]: { homeXG, awayXG, seasonXG, homeXGA, awayXGA, seasonXGA } }
+  formData         = {},   // { [teamId]: { scored, conceded, games } } — season averages
+  h2hData          = [],
+  homeInjuries     = 0,    // count of key players missing
+  awayInjuries     = 0,
+  rollingRatings   = {},   // { ratings: { [teamId]: { attack, defense } }, homeAdv }
+  eloRatings       = {},   // { [teamId]: eloRating }
+  homeRestDays     = null, // days since home team's last game
+  awayRestDays     = null, // days since away team's last game
+  refereeData      = null, // { yellowsPerGame, leagueAvgYellows }
+  teamHomeAdvFactor = 1.0, // per-team home advantage deviation from league norm
 }) {
   const ratingMap = rollingRatings.ratings ?? {};
 
@@ -447,6 +486,20 @@ function calculateLambdas({
   // Player availability penalty — each key player missing reduces lambda 5%
   lH *= Math.max(0, 1 - homeInjuries * 0.05);
   lA *= Math.max(0, 1 - awayInjuries * 0.05);
+
+  // Rest days — fatigue penalty for short turnaround
+  lH *= restDaysFactor(homeRestDays);
+  lA *= restDaysFactor(awayRestDays);
+
+  // Referee strictness — strict ref reduces total goals slightly (both sides equally)
+  if (refereeData) {
+    const rFactor = refereeFactor(refereeData, refereeData.leagueAvgYellows);
+    lH *= rFactor;
+    lA *= rFactor;
+  }
+
+  // Team-specific home advantage — deviation from league norm applied to home lambda
+  lH *= clamp(teamHomeAdvFactor, 0.92, 1.08);
 
   // Lambda ratio cap 3.3× — geometric mean preserves expected-goals "level" while capping the ratio
   const lambdaRatio = Math.max(lH, lA) / Math.min(lH, lA);
@@ -704,14 +757,63 @@ function predict(params) {
   // are always consistent. The win-probability bar separately shows who is likely to win.
   const predictedScore = bestScore;
 
+  // ─── Over/Under from normalised score matrix ───────────────────────────────
+  let under15 = 0, under25 = 0, under35 = 0;
+  let homeWinsRaw = 0, awayWinsRaw = 0, drawRaw = 0;
+  let homeBy2plus = 0, awayBy1plus = 0;
+  for (let h = 0; h < MATRIX_SIZE; h++) {
+    for (let a = 0; a < MATRIX_SIZE; a++) {
+      const p    = matrix[h][a];
+      const tot  = h + a;
+      const diff = h - a;
+      if (tot <= 1) under15 += p;
+      if (tot <= 2) under25 += p;
+      if (tot <= 3) under35 += p;
+      if (diff > 0) homeWinsRaw += p;
+      else if (diff < 0) awayWinsRaw += p;
+      else drawRaw += p;
+      if (diff >= 2) homeBy2plus += p;
+      if (diff <= -1) awayBy1plus += p;
+    }
+  }
+  const levelTotal = homeWinsRaw + awayWinsRaw || 1; // exclude draws for AH 0
+  const overUnder = {
+    over15: +(1 - under15).toFixed(3),
+    over25: +(1 - under25).toFixed(3),
+    over35: +(1 - under35).toFixed(3),
+    under25: +under25.toFixed(3),
+  };
+  const asianHandicap = {
+    // AH 0 (level ball): push on draw — who wins when it's not a draw?
+    level: {
+      home: +(homeWinsRaw / levelTotal).toFixed(3),
+      away: +(awayWinsRaw / levelTotal).toFixed(3),
+    },
+    // AH -0.5 home: home must win outright; draw = away covers
+    homeMinus05: +homeWinsRaw.toFixed(3),
+    awayMinus05: +(1 - homeWinsRaw).toFixed(3),
+    // AH -1.5 home: home must win by 2+
+    homeMinus15: +homeBy2plus.toFixed(3),
+    awayPlus15:  +(1 - homeBy2plus).toFixed(3),
+  };
+
+  // ─── Top 6 most likely scorelines ─────────────────────────────────────────
+  const topScores = Object.entries(scoreProbs)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([score, prob]) => ({ score, prob: +prob.toFixed(4) }));
+
   return {
     homeWin:        probs.hWin,
     draw:           probs.draw,
     awayWin:        probs.aWin,
     predictedScore,
-    bestScore,          // modal score (argmax joint PMF) — kept for score-matrix detail view
+    bestScore,
     scoreProbability: bestProb,
     scoreProbs,
+    topScores,
+    overUnder,
+    asianHandicap,
     matrix,
     confidence,
     lambdas:   { home: homeLambda, away: awayLambda },
@@ -963,6 +1065,7 @@ module.exports = {
   buildScoreMatrix,
   buildRollingRatings,
   buildEloRatings,
+  buildTeamHomeAdvantage,
   simulateSeason,
   logLoss,
   brierScore,
