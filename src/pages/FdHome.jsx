@@ -4,16 +4,8 @@ import { useParams } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { getLeague } from '../utils/leagues.jsx';
-
-// ─── Crest image ──────────────────────────────────────────────────────────────
-
-function Crest({ src, alt, size = 22 }) {
-  if (!src) return <div style={{ width: size, height: size, flexShrink: 0 }} />;
-  return (
-    <img src={src} alt={alt}
-      style={{ width: size, height: size, objectFit: 'contain', flexShrink: 0 }} />
-  );
-}
+import { ErrorCard } from '../components/ui/ErrorCard';
+import { Crest }     from '../components/ui/Crest';
 
 // ─── Countdown timer ──────────────────────────────────────────────────────────
 
@@ -256,13 +248,9 @@ function OffSeasonCard({ standings, standingsRow, recentResults, favTeam, league
         {/* Champion */}
         {champion && (
           <div style={{ marginTop: 20 }}>
-            {champion.crest && (
-              <img
-                src={champion.crest}
-                alt={champion.shortName}
-                style={{ width: 60, height: 60, objectFit: 'contain', marginBottom: 8 }}
-              />
-            )}
+            <div style={{ marginBottom: 8 }}>
+              <Crest src={champion.crest} alt={champion.shortName} size={60} />
+            </div>
             <div style={{
               fontFamily: 'Bebas Neue, sans-serif', fontSize: 22,
               color: 'var(--gold)', letterSpacing: 1,
@@ -287,10 +275,7 @@ function OffSeasonCard({ standings, standingsRow, recentResults, favTeam, league
           <div className="card-title">Your team · Final position</div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {standingsRow.crest && (
-                <img src={standingsRow.crest} alt={standingsRow.shortName}
-                  style={{ width: 32, height: 32, objectFit: 'contain' }} />
-              )}
+              <Crest src={standingsRow.crest} alt={standingsRow.shortName} size={32} />
               <div>
                 <div style={{ fontWeight: 700 }}>{standingsRow.shortName}</div>
                 <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
@@ -323,10 +308,7 @@ function OffSeasonCard({ standings, standingsRow, recentResults, favTeam, league
           <div className="card-title">Top scorer</div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {topScorer.team.crest && (
-                <img src={topScorer.team.crest} alt={topScorer.team.shortName}
-                  style={{ width: 28, height: 28, objectFit: 'contain' }} />
-              )}
+              <Crest src={topScorer.team.crest} alt={topScorer.team.shortName} size={28} />
               <div>
                 <div style={{ fontWeight: 700 }}>{topScorer.player.name}</div>
                 <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
@@ -393,7 +375,7 @@ export default function FdHome() {
   const favTeam = useFavouriteTeam();
 
   // All matches (cached) — gives us enough data to find next fixture + last 5 results
-  const { data: allMatches, loading: mLoading, error: mError } = useFetch(
+  const { data: allMatches, loading: mLoading, error: mError, refresh: mRefresh } = useFetch(
     `/api/fd/matches?league=${leagueId}`
   );
   const { data: standings, loading: sLoading } = useFetch(
@@ -452,7 +434,7 @@ export default function FdHome() {
   }
 
   if (mError) {
-    return <div className="error-card">Failed to load data: {mError}</div>;
+    return <ErrorCard message={mError} onRetry={mRefresh} />;
   }
 
   // Team from a different league stored in localStorage

@@ -1,5 +1,23 @@
 import { useState, useEffect, useRef } from 'react';
 
+// ─── Shared visibility subscriber registry ────────────────────────────────────
+// One DOM listener for the entire app. Each useFetch instance registers a
+// callback; the single listener fans out to all subscribers.
+// Previously each hook instance added its own addEventListener, causing
+// N listeners (one per mounted useFetch) and an N-request storm on tab return.
+const _visibilitySubscribers = new Set();
+let   _visibilityListenerAttached = false;
+
+function _ensureVisibilityListener() {
+  if (_visibilityListenerAttached) return;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      _visibilitySubscribers.forEach(fn => fn());
+    }
+  });
+  _visibilityListenerAttached = true;
+}
+
 export function useFetch(url, deps = []) {
   const [data,       setData]       = useState(null);
   const [loading,    setLoading]    = useState(!!url);
@@ -9,13 +27,12 @@ export function useFetch(url, deps = []) {
   const abortRef = useRef(null);
 
   // Re-fetch whenever the browser tab comes back into view.
-  // Handles the "came back after a while" case without polling every component.
+  // Uses a single shared DOM listener — not one per hook instance.
   useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') setRefreshKey(k => k + 1);
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    _ensureVisibilityListener();
+    const onVisible = () => setRefreshKey(k => k + 1);
+    _visibilitySubscribers.add(onVisible);
+    return () => _visibilitySubscribers.delete(onVisible);
   }, []);
 
   useEffect(() => {
@@ -39,7 +56,14 @@ export function useFetch(url, deps = []) {
       .then(d => { setData(d); setLoading(false); })
       .catch(err => {
         if (err.name === 'AbortError') return;
-        setError(err.message);
+        // Friendlify raw HTTP status codes so users never see "HTTP 500"
+        const msg = err.message;
+        const friendly = /^HTTP 5/.test(msg)
+          ? 'Server temporarily unavailable'
+          : /^HTTP 4/.test(msg)
+            ? 'Resource not found'
+            : msg;
+        setError(friendly);
         setLoading(false);
       });
 
@@ -47,5 +71,6 @@ export function useFetch(url, deps = []) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, refreshKey, ...deps]);
 
-  return { data, loading, error };
+  const refresh = () => setRefreshKey(k => k + 1);
+  return { data, loading, error, refresh };
 }

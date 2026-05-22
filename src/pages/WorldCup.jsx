@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import PathToFinal              from '../components/PathToFinal';
+import { useState, useEffect, useMemo, memo } from 'react';
+import PathToFinal, { PathToFinalCompact, PathToFinalCompactHeader, PathToFinalSkeleton } from '../components/PathToFinal';
+import { MatchCardSkeleton }    from '../components/MatchCard';
 import { format, parseISO } from 'date-fns';
 
 // ─── Flag map ─────────────────────────────────────────────────────────────────
@@ -184,6 +185,57 @@ function pct(v) { return `${Math.round((v ?? 0) * 100)}%`; }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
+// ─── How It Works — trust-layer panel ────────────────────────────────────────
+// Explains the model methodology in plain language.
+// Hidden by default so it doesn't clutter the default view.
+// memo: static content, never needs to re-render.
+const HowItWorksPanel = memo(function HowItWorksPanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        className="hiw-toggle"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-controls="hiw-panel"
+      >
+        <span aria-hidden>ℹ️</span>
+        How predictions work
+        <span style={{ fontSize: 10, transition: 'transform 0.2s', display: 'inline-block', transform: open ? 'rotate(180deg)' : 'none' }} aria-hidden>▾</span>
+      </button>
+
+      {open && (
+        <div id="hiw-panel" className="hiw-panel" role="region" aria-label="How predictions work">
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            Model methodology
+          </div>
+          <div className="hiw-grid">
+            <div className="hiw-item">
+              <div className="hiw-label">⚡ Team strength</div>
+              <div className="hiw-desc">Live ELO ratings — the same concept as FIFA rankings — weight each team by opponent quality and result recency.</div>
+            </div>
+            <div className="hiw-item">
+              <div className="hiw-label">📈 Recent form</div>
+              <div className="hiw-desc">Last 10 international results nudge expected goals by up to ±5%, capturing momentum without overfitting.</div>
+            </div>
+            <div className="hiw-item">
+              <div className="hiw-label">🎯 Goals model</div>
+              <div className="hiw-desc">Attack &amp; defence ratings produce expected goals per team. A Poisson distribution with Dixon-Coles correction converts these to full scoreline probabilities.</div>
+            </div>
+            <div className="hiw-item">
+              <div className="hiw-label">🔁 10,000 simulations</div>
+              <div className="hiw-desc">The complete tournament bracket is simulated 10,000 times. Win % at each stage — R32 through champion — reflects those outcomes.</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 10, fontSize: 10, color: '#374151', fontStyle: 'italic' }}>
+            For entertainment only · predictions reset when new data arrives
+          </div>
+        </div>
+      )}
+    </>
+  );
+});
+
 function PhaseBadge({ phase }) {
   return (
     <div style={{
@@ -317,7 +369,7 @@ function MatchRow({ fixture }) {
             </span>
           ) : pred ? (
             <span style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 16, letterSpacing: 2, margin: '0 8px', color: 'var(--gold)' }}>
-              {pred.predictedScore.replace('-', '–')}
+              {(pred.predictedScore ?? '?-?').replace('-', '–')}
             </span>
           ) : (
             <span style={{ margin: '0 8px', color: 'var(--text-muted)', fontSize: 14 }}>vs</span>
@@ -364,7 +416,7 @@ function MatchRow({ fixture }) {
                 letterSpacing: 1.5,
                 color:       'var(--gold)',
               }}>
-                {prePred.predictedScore.replace('-', '–')}
+                {(prePred.predictedScore ?? '?-?').replace('-', '–')}
               </span>
               <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
                 {pct(prePred.homeWin)} / {pct(prePred.draw)} / {pct(prePred.awayWin)}
@@ -431,6 +483,8 @@ function GroupStageView({ data }) {
             {/* Group header */}
             <button
               onClick={() => setExpandedGroup(isOpen ? null : letter)}
+              aria-expanded={isOpen}
+              aria-label={`${isOpen ? 'Collapse' : 'Expand'} Group ${letter}`}
               style={{
                 width:       '100%',
                 background:  'transparent',
@@ -451,7 +505,7 @@ function GroupStageView({ data }) {
                 fontSize:    18,
                 color:       'var(--gold)',
                 flexShrink:  0,
-              }}>
+              }} aria-hidden>
                 {letter}
               </div>
               <div style={{ flex: 1, textAlign: 'left' }}>
@@ -545,7 +599,18 @@ function KnockoutView({ data }) {
 
 // Predicted standings tab — all 12 groups in one scrollable view
 function PredictedTableView({ data, onTeamClick }) {
-  const { hardcodedGroups, groupPredictedStandings } = data;
+  const { hardcodedGroups, groupPredictedStandings, tournamentReach } = data;
+
+  // Guard: if hardcodedGroups has no entries the model hasn't loaded yet
+  if (!hardcodedGroups || Object.keys(hardcodedGroups).length === 0) {
+    return (
+      <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 40 }}>
+        <div style={{ fontSize: 28, marginBottom: 8 }}>📊</div>
+        <div style={{ fontWeight: 600 }}>Group data unavailable</div>
+        <div style={{ fontSize: 12, marginTop: 4 }}>Check back once the tournament draw has loaded</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -566,6 +631,38 @@ function PredictedTableView({ data, onTeamClick }) {
               </div>
               <span style={{ fontWeight: 700, fontSize: 13, color }}>Group {letter}</span>
             </div>
+
+            {rows.length === 0 && (
+              <div style={{ padding: '12px 0', color: 'var(--text-muted)', fontSize: 12, textAlign: 'center' }}>
+                Predictions loading…
+              </div>
+            )}
+
+            {/* Column header — only shown when knockout reach data is present */}
+            {rows.length > 0 && tournamentReach && (
+              <div style={{
+                display:        'flex',
+                justifyContent: 'flex-end',
+                paddingBottom:  5,
+                marginBottom:   2,
+                borderBottom:   '1px solid var(--border)',
+              }}>
+                {/* Inner column centres the label over the stage names */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                  <span style={{
+                    fontSize:      9,
+                    fontWeight:    700,
+                    letterSpacing: '0.06em',
+                    textTransform: 'uppercase',
+                    color:         'var(--text-muted)',
+                    opacity:       0.6,
+                  }}>
+                    Knockout path
+                  </span>
+                  <PathToFinalCompactHeader />
+                </div>
+              </div>
+            )}
 
             {rows.map((row, i) => {
               const advances  = i < 2;
@@ -601,6 +698,14 @@ function PredictedTableView({ data, onTeamClick }) {
                       3rd?
                     </span>
                   ) : null}
+                  {/* PathToFinalCompact: knockout journey mini-bar */}
+                  {tournamentReach?.[row.team] && (
+                    <PathToFinalCompact
+                      team={row.team}
+                      reach={tournamentReach[row.team]}
+                      color={rowColor}
+                    />
+                  )}
                 </div>
               );
             })}
@@ -839,6 +944,7 @@ function TeamDetailModal({ team, data, onClose }) {
           </div>
           <button
             onClick={onClose}
+            aria-label="Close team detail"
             style={{
               background:   'var(--surface2)',
               border:       '1px solid var(--border)',
@@ -850,7 +956,7 @@ function TeamDetailModal({ team, data, onClose }) {
               display:      'flex', alignItems: 'center', justifyContent: 'center',
             }}
           >
-            ✕
+            <span aria-hidden>✕</span>
           </button>
         </div>
 
@@ -947,9 +1053,23 @@ function TeamDetailModal({ team, data, onClose }) {
 
 // ─── Insights View ────────────────────────────────────────────────────────────
 function InsightsView({ data, onTeamClick }) {
-  const { groupInsights = [], upsetMatches = [] } = data;
+  const { groupInsights = [] } = data;
   // Which accordion sections are open (multiple can be open at once)
   const [open, setOpen] = useState(new Set(['death']));
+
+  // Compute tight matches: all group matches sorted by smallest homeWin/awayWin gap
+  const tightMatches = useMemo(() => {
+    const gmp = data.groupMatchPredictions ?? {};
+    const all = [];
+    for (const [letter, matches] of Object.entries(gmp)) {
+      for (const m of matches) {
+        if (!m.home || !m.away) continue;
+        const gap = Math.abs((m.homeWin ?? 0) - (m.awayWin ?? 0));
+        all.push({ ...m, group: letter, gap });
+      }
+    }
+    return all.sort((a, b) => a.gap - b.gap).slice(0, 6);
+  }, [data.groupMatchPredictions]);
 
   function toggle(id) {
     setOpen(prev => {
@@ -1127,113 +1247,91 @@ function InsightsView({ data, onTeamClick }) {
         )}
       </div>
 
-      {/* ── Upset Tracker ──────────────────────────────────────────────────── */}
+      {/* ── Tight Matches ──────────────────────────────────────────────────── */}
       <div style={{ borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
-        <SectionHeader id="upset" emoji="⚡" title="Upset Tracker" count={upsetMatches.length > 0 ? `${upsetMatches.length} flagged` : 'none'} countColor="#f59e0b" />
+        <SectionHeader id="upset" emoji="⚖️" title="Tight Matches" count={tightMatches.length > 0 ? `Top ${tightMatches.length}` : null} countColor="#a78bfa" />
         {open.has('upset') && (
         <div style={{ background: 'var(--surface)', padding: '10px 10px 12px' }}>
-        {upsetMatches.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>
-            <div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>
-            <div style={{ fontWeight: 600 }}>No major upsets predicted</div>
-            <div style={{ fontSize: 12, marginTop: 4 }}>All underdogs below 30% win probability</div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {upsetMatches.map((m, i) => {
-              const meta       = UPSET_META[m.label] ?? { emoji: '⚡', color: '#f59e0b' };
-              const groupColor = GROUP_COLORS[m.group] ?? 'var(--gold)';
-              const underdogPct = Math.round(m.underdogWin * 100);
-              const favPct      = Math.round((1 - m.underdogWin - m.draw) * 100);
-              const isHomeUnderdog = m.underdog === m.home;
+          {tightMatches.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📊</div>
+              <div style={{ fontWeight: 600 }}>No predictions yet</div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>Check back once groups are set</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {tightMatches.map((m, i) => {
+                const groupColor = GROUP_COLORS[m.group] ?? 'var(--gold)';
+                const homeWinPct = Math.round((m.homeWin ?? 0) * 100);
+                const drawPct    = Math.round((m.draw ?? 0) * 100);
+                const awayWinPct = Math.round((m.awayWin ?? 0) * 100);
+                const gapPct     = Math.round(m.gap * 100);
 
-              return (
-                <div key={i} className="card" style={{
-                  borderLeft: `3px solid ${meta.color}`,
-                  padding:    '12px 14px',
-                }}>
-                  {/* Header row */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                    <div style={{
-                      width: 22, height: 22, borderRadius: 5,
-                      background: `${groupColor}22`, border: `1px solid ${groupColor}55`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontFamily: 'Bebas Neue, sans-serif', fontSize: 13, color: groupColor, flexShrink: 0,
-                    }}>
-                      {m.group}
+                return (
+                  <div key={i} className="card" style={{ borderLeft: '3px solid #a78bfa', padding: '12px 14px' }}>
+                    {/* Header row */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div style={{
+                        width: 22, height: 22, borderRadius: 5,
+                        background: `${groupColor}22`, border: `1px solid ${groupColor}55`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontFamily: 'Bebas Neue, sans-serif', fontSize: 13, color: groupColor, flexShrink: 0,
+                      }}>
+                        {m.group}
+                      </div>
+                      <span style={{ flex: 1, fontSize: 11, color: 'var(--text-muted)' }}>Group {m.group}</span>
+                      <div style={{
+                        fontSize: 10, fontWeight: 700,
+                        background: '#a78bfa22', border: '1px solid #a78bfa55',
+                        color: '#a78bfa', borderRadius: 6, padding: '2px 8px',
+                      }}>
+                        {gapPct}% gap
+                      </div>
                     </div>
-                    <span style={{ flex: 1, fontSize: 11, color: 'var(--text-muted)' }}>Group {m.group}</span>
-                    <div style={{
-                      fontSize: 10, fontWeight: 700,
-                      background: `${meta.color}22`, border: `1px solid ${meta.color}55`,
-                      color: meta.color, borderRadius: 6, padding: '2px 8px',
-                    }}>
-                      {meta.emoji} {m.label}
-                    </div>
-                  </div>
 
-                  {/* Match card */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                    {/* Home */}
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <span style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{flag(m.home)}</span>
-                      <div>
+                    {/* Teams + score */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <span style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{flag(m.home)}</span>
                         <div style={{ fontSize: 12, fontWeight: 700, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.home)}>{m.home}</div>
-                        {!isHomeUnderdog && (
-                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--gold)', letterSpacing: 0.4 }}>FAVOURITE</div>
-                        )}
-                        {isHomeUnderdog && (
-                          <div style={{ fontSize: 9, fontWeight: 700, color: meta.color, letterSpacing: 0.4 }}>UNDERDOG</div>
-                        )}
+                      </div>
+
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 2, color: 'var(--gold)', lineHeight: 1 }}>
+                          {(m.predictedScore ?? '?-?').replace('-', '–')}
+                        </div>
+                        <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>PREDICTED</div>
+                      </div>
+
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 5, justifyContent: 'flex-end' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, textAlign: 'right', cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{m.away}</div>
+                        <span style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{flag(m.away)}</span>
                       </div>
                     </div>
 
-                    {/* Predicted score */}
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 2, color: 'var(--gold)', lineHeight: 1 }}>
-                        {m.predictedScore.replace('-', '–')}
+                    {/* Probability bar */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', minWidth: 30, textAlign: 'left' }}>{homeWinPct}%</span>
+                      <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden', display: 'flex' }}>
+                        <div style={{ width: `${homeWinPct}%`, height: '100%', background: 'rgba(255,255,255,0.3)', borderRadius: '3px 0 0 3px' }} />
+                        <div style={{ width: `${drawPct}%`, height: '100%', background: 'rgba(255,215,0,0.4)' }} />
+                        <div style={{ width: `${awayWinPct}%`, height: '100%', background: '#a78bfa', borderRadius: '0 3px 3px 0' }} />
                       </div>
-                      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>PREDICTED</div>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', minWidth: 30, textAlign: 'right' }}>{awayWinPct}%</span>
                     </div>
-
-                    {/* Away */}
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 5, justifyContent: 'flex-end' }}>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{m.away}</div>
-                        {isHomeUnderdog && (
-                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--gold)', letterSpacing: 0.4 }}>FAVOURITE</div>
-                        )}
-                        {!isHomeUnderdog && (
-                          <div style={{ fontSize: 9, fontWeight: 700, color: meta.color, letterSpacing: 0.4 }}>UNDERDOG</div>
-                        )}
-                      </div>
-                      <span style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => onTeamClick?.(m.away)}>{flag(m.away)}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{m.home}</span>
+                      <span style={{ fontSize: 9, color: 'rgba(255,215,0,0.7)' }}>Draw</span>
+                      <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>{m.away}</span>
                     </div>
                   </div>
-
-                  {/* Probability bar */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', minWidth: 30, textAlign: 'left' }}>{favPct}%</span>
-                    <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden', display: 'flex' }}>
-                      <div style={{ width: `${favPct}%`, height: '100%', background: 'rgba(255,255,255,0.3)', borderRadius: '3px 0 0 3px' }} />
-                      <div style={{ width: `${Math.round(m.draw * 100)}%`, height: '100%', background: 'rgba(255,215,0,0.4)' }} />
-                      <div style={{ width: `${underdogPct}%`, height: '100%', background: meta.color, borderRadius: '0 3px 3px 0' }} />
-                    </div>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, minWidth: 30, textAlign: 'right' }}>{underdogPct}%</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>
-                    <span style={{ fontSize: 9, color: 'var(--text-muted)' }}>
-                      {isHomeUnderdog ? m.home : m.away} underdog win probability: <strong style={{ color: meta.color }}>{underdogPct}%</strong>
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          )}
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 8, fontStyle: 'italic' }}>
+            Ranked by smallest win-probability gap between teams · Poisson model · read-only
           </div>
-        )}
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 8, fontStyle: 'italic' }}>
-          Flags matches where underdog win% ≥ 30% · Poisson model · read-only
-        </div>
         </div>
         )}
       </div>
@@ -1551,7 +1649,7 @@ function AccuracyView({ data }) {
               </div>
               {/* Predicted score */}
               <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'Bebas Neue, sans-serif', letterSpacing: 1 }}>
-                {prePred.predictedScore.replace('-','–')}
+                {(prePred.predictedScore ?? '?-?').replace('-','–')}
               </span>
               {/* Outcome badge */}
               <span style={{ fontSize: 9, fontWeight: 700, color, background: `${color}18`, border: `1px solid ${color}44`, borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}>
@@ -2157,13 +2255,49 @@ export default function WorldCup() {
     try { return !localStorage.getItem('wc_disclaimer_seen'); } catch { return false; }
   });
 
+  // ── Stable data spreads ────────────────────────────────────────────────────
+  // Inline object literals like `{ hardcodedGroups: {}, ...data }` create a new
+  // reference on every render (e.g. when selectedTeam changes), causing all child
+  // components — including PathToFinalCompact instances — to see new props and
+  // re-run their useMemo calls unnecessarily.
+  // Memoizing here means the reference only changes when the fetch result updates.
+  const dataFallback = useMemo(
+    () => ({ hardcodedGroups: {}, ...data }),
+    [data],
+  );
+  const dataPreTournament = useMemo(
+    () => ({ hardcodedGroups: {}, phase: 'PRE_TOURNAMENT', ...data }),
+    [data],
+  );
+
   function dismissDisclaimer() {
     try { localStorage.setItem('wc_disclaimer_seen', '1'); } catch {}
     setShowDisclaimer(false);
   }
 
   if (loading) {
-    return <div className="loading-card"><div className="spinner" /><div>Loading World Cup data…</div></div>;
+    // Skeleton loader — matches final layout, zero layout shift on data arrival
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* Group skeleton × 3 */}
+        {[0, 1, 2].map(i => (
+          <div key={i} className="skel-group">
+            <div className="skeleton" style={{ height: 14, width: 80, borderRadius: 4, marginBottom: 12 }} />
+            {[0, 1, 2, 3].map(j => (
+              <div key={j} className="skel-row">
+                <div className="skel-pos skeleton" />
+                <div className="skel-flag skeleton" />
+                <div className="skel-name skeleton" />
+                <div className="skel-bar-sm skeleton" />
+                <div className="skel-pts skeleton" />
+              </div>
+            ))}
+          </div>
+        ))}
+        {/* PathToFinal skeleton */}
+        <PathToFinalSkeleton />
+      </div>
+    );
   }
 
   if (error && !data) {
@@ -2186,7 +2320,7 @@ export default function WorldCup() {
       <div className="hero-card" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
           <span style={{ fontSize: 28 }}>🌍</span>
-          <div>
+          <div style={{ flex: 1 }}>
             <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, letterSpacing: 2, lineHeight: 1 }}>
               FIFA WORLD CUP 2026
             </div>
@@ -2195,7 +2329,10 @@ export default function WorldCup() {
             </div>
           </div>
         </div>
-        <PhaseBadge phase={phase} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          <PhaseBadge phase={phase} />
+          <HowItWorksPanel />
+        </div>
       </div>
 
       {/* Single tab bar — adapts between pre-tournament and live */}
@@ -2242,15 +2379,15 @@ export default function WorldCup() {
       {view === 'rankings' ? (
         <EloRankingsView />
       ) : view === 'bracket' ? (
-        <BracketView data={{ hardcodedGroups: {}, ...data }} />
+        <BracketView data={dataFallback} />
       ) : !hasApiData && view === 'table' ? (
-        <PredictedTableView data={{ hardcodedGroups: {}, ...data }} onTeamClick={setSelectedTeam} />
+        <PredictedTableView data={dataFallback} onTeamClick={setSelectedTeam} />
       ) : !hasApiData && view === 'insights' ? (
-        <InsightsView data={{ hardcodedGroups: {}, ...data }} onTeamClick={setSelectedTeam} />
+        <InsightsView data={dataFallback} onTeamClick={setSelectedTeam} />
       ) : !hasApiData && view === 'odds' ? (
-        <WinnerOddsView data={{ hardcodedGroups: {}, ...data }} onTeamClick={setSelectedTeam} />
+        <WinnerOddsView data={dataFallback} onTeamClick={setSelectedTeam} />
       ) : !hasApiData ? (
-        <PreTournamentView data={{ hardcodedGroups: {}, phase: 'PRE_TOURNAMENT', ...data }} onTeamClick={setSelectedTeam} />
+        <PreTournamentView data={dataPreTournament} onTeamClick={setSelectedTeam} />
       ) : view === 'groups' ? (
         <GroupStageView data={data} />
       ) : view === 'accuracy' ? (

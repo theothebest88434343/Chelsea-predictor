@@ -1,14 +1,27 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import BottomNav from './components/BottomNav';
 import NotificationBell from './components/NotificationBell';
+// Home + LeagueSelector stay eager — they are the entry point and onboarding gate.
 import Home from './pages/Home';
-import Fixtures from './pages/Fixtures';
-import League from './pages/League';
-import Stats from './pages/Stats';
-import Round from './pages/Round';
-import WorldCup from './pages/WorldCup';
 
-import LeagueSelector from './pages/LeagueSelector';
+// Heavy pages — each becomes a separate chunk. WC and League never load together.
+const Fixtures = lazy(() => import('./pages/Fixtures'));
+const League   = lazy(() => import('./pages/League'));
+const Stats    = lazy(() => import('./pages/Stats'));
+const Round    = lazy(() => import('./pages/Round'));
+const WorldCup = lazy(() => import('./pages/WorldCup'));
+
+// Minimal full-page fallback for Suspense — reuses existing CSS classes.
+function PageLoader() {
+  return (
+    <div className="loading-card" aria-label="Loading…">
+      <div className="spinner" />
+    </div>
+  );
+}
+
+import LeagueSelector from './pages/LeagueSelector'; // eager: needed for onboarding
 import { getLeague } from './utils/leagues.jsx';
 
 // Forces a full remount of any league-scoped page when the leagueId changes,
@@ -65,6 +78,7 @@ export default function App() {
       </header>
 
       <main className="page-content">
+        <Suspense fallback={<PageLoader />}>
         <Routes>
           {/* League selector / onboarding */}
           <Route path="/"                   element={<LeagueSelector />} />
@@ -94,6 +108,7 @@ export default function App() {
           {/* Catch-all */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </main>
 
       <BottomNav />

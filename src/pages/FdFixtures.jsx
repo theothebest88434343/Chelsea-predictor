@@ -1,46 +1,55 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { format, parseISO } from 'date-fns';
 import { useParams } from 'react-router-dom';
-import { ChevronDown, ChevronUp, BarChart2, Zap, Activity, GitMerge, Lightbulb } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useFetch } from '../hooks/useFetch';
 import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { getLeague } from '../utils/leagues.jsx';
-import { ConfidenceBadge } from '../utils/confidence.jsx';
 import ScoreMatrix from '../components/ScoreMatrix';
 import XGPanel from '../components/XGPanel';
 import FormChart from '../components/FormChart';
 import H2HPanel from '../components/H2HPanel';
+import { ProbBar }          from '../components/ui/ProbBar';
+import { ExpandableSection } from '../components/ui/ExpandableSection';
+import { ErrorCard }        from '../components/ui/ErrorCard';
+import { Crest }            from '../components/ui/Crest';
 
-// ─── Crest image ──────────────────────────────────────────────────────────────
+// ─── Module-level prediction cache ───────────────────────────────────────────
+// Keyed by full request URL (league + fixtureId). Survives re-renders and tab
+// returns — once a prediction is fetched it is never re-requested in this session.
+// Prevents N parallel prediction requests on mount and repeated requests on
+// every visibilitychange event when many fixture rows are rendered.
+const _predCache = new Map();
 
-function Crest({ src, alt, size = 22 }) {
-  if (!src) return <div style={{ width: size, height: size, flexShrink: 0 }} />;
-  return (
-    <img
-      src={src} alt={alt}
-      style={{ width: size, height: size, objectFit: 'contain', flexShrink: 0 }}
-    />
-  );
-}
+function useCachedPrediction(url) {
+  const [data,    setData]    = useState(() => (url ? _predCache.get(url) ?? null : null));
+  const [loading, setLoading] = useState(!data && !!url);
+  const abortRef = useRef(null);
 
-// ─── Probability bar (identical to PL) ───────────────────────────────────────
+  useEffect(() => {
+    if (!url) { setData(null); setLoading(false); return; }
 
-function ProbBar({ homeWin, draw, awayWin, homeName, awayName }) {
-  const h = Math.round(homeWin * 100);
-  const d = Math.round(draw    * 100);
-  const a = 100 - h - d;
-  return (
-    <div>
-      <div className="prob-row">
-        <div className="prob-segment home" style={{ flex: h }}>{h >= 14 && `${h}%`}</div>
-        <div className="prob-segment draw" style={{ flex: d }}>{d >= 10 && `${d}%`}</div>
-        <div className="prob-segment away" style={{ flex: Math.max(a, 1) }}>{a >= 14 && `${a}%`}</div>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
-        <span>{homeName}</span><span>Draw</span><span>{awayName}</span>
-      </div>
-    </div>
-  );
+    // Cache hit — no network request needed
+    if (_predCache.has(url)) {
+      setData(_predCache.get(url));
+      setLoading(false);
+      return;
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLoading(true);
+
+    fetch(url, { signal: controller.signal, cache: 'no-store' })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(d  => { _predCache.set(url, d); setData(d); setLoading(false); })
+      .catch(err => { if (err.name !== 'AbortError') setLoading(false); });
+
+    return () => controller.abort();
+  }, [url]); // no refreshKey — predictions are immutable once generated
+
+  return { data, loading };
 }
 
 // ─── Derive per-team recent form from all-matches data ────────────────────────
@@ -178,39 +187,19 @@ function FdOpponentAnalysis({ leagueId, opponentId, opponentName, myTeamName }) 
 }
 
 // ─── Why this prediction ──────────────────────────────────────────────────────
+// Header: "KEY FACTORS" (PL canonical). Factor 1 (favourite) removed — the
+// hero sentence + tier badge already cover that signal. Factors: xG, atk/def, tempo.
 
 function WhyPrediction({ pred, homeTeam, awayTeam }) {
   if (!pred?.lambdas) return null;
 
-  const { home: lH, away: lA }           = pred.lambdas;
+  const { home: lH, away: lA }                       = pred.lambdas;
   const { hAtk = 1, hDef = 1, aAtk = 1, aDef = 1 } = pred.strengths ?? {};
-  const { homeWin = 0, draw = 0, awayWin = 0 }       = pred;
 
   const factors = [];
+  const lDiff   = ((lH - lA) / Math.max(lA, 0.1) * 100).toFixed(0);
 
-  // 1. Favourite / market leader
-  const maxProb = Math.max(homeWin, draw, awayWin);
-  if (homeWin === maxProb) {
-    const label = maxProb >= 0.55 ? 'clear favourite' : 'slight favourite';
-    factors.push(
-      `${homeTeam.shortName} are the ${label} at ${Math.round(homeWin * 100)}% — ` +
-      `home advantage and model ratings both lean their way.`
-    );
-  } else if (awayWin === maxProb) {
-    const label = maxProb >= 0.55 ? 'clear favourite' : 'slight favourite';
-    factors.push(
-      `${awayTeam.shortName} are the ${label} at ${Math.round(awayWin * 100)}% — ` +
-      `they carry a stronger expected-goal profile despite playing away.`
-    );
-  } else {
-    factors.push(
-      `This is a closely-contested match — a draw is the most likely single outcome ` +
-      `at ${Math.round(draw * 100)}%, with both sides evenly matched.`
-    );
-  }
-
-  // 2. Expected goals edge
-  const lDiff = ((lH - lA) / Math.max(lA, 0.1) * 100).toFixed(0);
+  // 1. Expected goals edge
   if (lH > lA * 1.12) {
     factors.push(
       `${homeTeam.shortName} are expected to create ${Math.abs(lDiff)}% more ` +
@@ -231,7 +220,7 @@ function WhyPrediction({ pred, homeTeam, awayTeam }) {
     );
   }
 
-  // 3. Attack vs defence matchup
+  // 2. Attack vs defence matchup
   if (hAtk > aAtk * 1.15 && aDef > hDef * 1.08) {
     factors.push(
       `${homeTeam.shortName}'s attack (${hAtk.toFixed(2)}×) faces a ` +
@@ -258,7 +247,7 @@ function WhyPrediction({ pred, homeTeam, awayTeam }) {
     );
   }
 
-  // 4. Match tempo — total goals projection
+  // 3. Match tempo — total goals projection
   const totalGoals = lH + lA;
   if (totalGoals >= 3.0) {
     factors.push(
@@ -273,17 +262,16 @@ function WhyPrediction({ pred, homeTeam, awayTeam }) {
     );
   }
 
-  const topFactors = factors.slice(0, 4);
+  const topFactors = factors.slice(0, 3);
 
   return (
-    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-        <Lightbulb size={13} color="var(--gold)" />
-        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>
-          WHY THIS PREDICTION
+    <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+      <div style={{ marginBottom: 10 }}>
+        <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>
+          Key factors
         </span>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {topFactors.map((factor, i) => (
           <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <div style={{
@@ -294,7 +282,7 @@ function WhyPrediction({ pred, homeTeam, awayTeam }) {
             }}>
               {i + 1}
             </div>
-            <div style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text)' }}>
+            <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text)' }}>
               {factor}
             </div>
           </div>
@@ -307,13 +295,20 @@ function WhyPrediction({ pred, homeTeam, awayTeam }) {
 // ─── Single fixture row (expandable) — mirrors PL FixtureRow ─────────────────
 
 function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded,    setExpanded]    = useState(false);
+  // Two-tier progressive disclosure: Key Evidence open by default, Markets collapsed
+  const [insightOpen, setInsightOpen] = useState(true);
+  const [marketsOpen, setMarketsOpen] = useState(false);
 
-  // Prediction — fetch for upcoming matches only (always, not lazily, like PL)
-  const { data: predData } = useFetch(
+  // Prediction — fetch for upcoming matches only, cached per fixtureId.
+  const { data: predData, loading: predLoading } = useCachedPrediction(
     !match.finished ? `/api/fd/predictions?league=${leagueId}&fixtureId=${match.id}` : null
   );
   const pred = predData?.prediction;
+
+  // Predicted winner for upcoming matches — subtle font-weight boost for scannability
+  const homeIsPredWinner = !match.finished && pred && pred.homeWin > pred.awayWin + 0.05;
+  const awayIsPredWinner = !match.finished && pred && pred.awayWin > pred.homeWin + 0.05;
 
   // All-matches — fetched lazily on expand for form + H2H derivation
   const { data: allMatches } = useFetch(
@@ -367,7 +362,7 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
         onClick={() => setExpanded(e => !e)}
       >
         {/* Row 1: MD chip + kickoff + chevron */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, opacity: 0.85 }}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="chip chip-muted">MD {match.matchday}</span>
             {kicks && (
@@ -388,7 +383,7 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <Crest src={match.homeTeam.crest} alt={match.homeTeam.shortName} size={22} />
               <span style={{
-                fontWeight: homeIsSelected || winSide === 'home' ? 700 : 500,
+                fontWeight: homeIsSelected || winSide === 'home' ? 700 : homeIsPredWinner ? 600 : 500,
                 color: homeIsSelected       ? 'var(--gold)'
                      : winSide === 'home'  ? 'var(--gold)'
                      : 'var(--text)',
@@ -410,7 +405,7 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
                 <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 26, letterSpacing: 3, color: 'var(--text)', lineHeight: 1 }}>
                   {pred.predictedScore?.replace('-', '–') ?? '?–?'}
                 </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>top score</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1, letterSpacing: 1, fontWeight: 500 }}>PREDICTED</div>
               </>
             ) : (
               <div style={{ color: 'var(--text-muted)', fontFamily: 'Bebas Neue, sans-serif', fontSize: 20 }}>vs</div>
@@ -421,7 +416,7 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
           <div style={{ flex: 1, textAlign: 'right' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 7 }}>
               <span style={{
-                fontWeight: awayIsSelected || winSide === 'away' ? 700 : 500,
+                fontWeight: awayIsSelected || winSide === 'away' ? 700 : awayIsPredWinner ? 600 : 500,
                 color: awayIsSelected       ? 'var(--gold)'
                      : winSide === 'away'  ? 'var(--gold)'
                      : 'var(--text)',
@@ -434,7 +429,7 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
           </div>
         </div>
 
-        {/* Row 3: ProbBar — upcoming only */}
+        {/* PROB BAR — probability summary, collapsed view */}
         {pred && (
           <div style={{ marginTop: 10 }}>
             <ProbBar
@@ -443,184 +438,202 @@ function FdFixtureRow({ match, leagueId, selectedTeamId, favTeam }) {
             />
           </div>
         )}
-
-        {/* Row 4: ConfidenceBadge */}
-        {pred && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4, alignItems: 'center' }}>
-            <ConfidenceBadge homeWin={pred.homeWin} draw={pred.draw} awayWin={pred.awayWin} />
-          </div>
-        )}
       </div>
 
-      {/* ── Expanded panel ────────────────────────────────────────────────────── */}
+      {/* ── Expanded panel — 2-tier progressive disclosure ─────────────────── */}
       {expanded && (
-        <div style={{ borderTop: '1px solid var(--border)' }}>
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
 
-          {/* Model inputs — upcoming only */}
-          {pred?.lambdas && (
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <Zap size={13} color="var(--gold)" />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>MODEL INPUTS</span>
-              </div>
-              <XGPanel lambdas={pred.lambdas} strengths={pred.strengths} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
-            </div>
-          )}
-
-          {/* Why this prediction — upcoming only */}
-          {pred?.lambdas && (
-            <WhyPrediction pred={pred} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
-          )}
-
-          {/* Score matrix — upcoming only */}
-          {pred?.matrix && (
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <BarChart2 size={13} color="var(--gold)" />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>SCORE MATRIX</span>
-              </div>
-              <ScoreMatrix matrix={pred.matrix} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
-            </div>
-          )}
-
-          {/* Top scorelines — upcoming only */}
-          {pred?.topScores?.length > 0 && (
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <BarChart2 size={13} color="var(--gold)" />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>TOP SCORELINES</span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-                {pred.topScores.slice(0, 6).map(({ score, prob }) => (
-                  <div key={score} style={{
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    padding: '8px 10px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}>
-                    <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>{score}</span>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{(prob * 100).toFixed(1)}%</span>
+          {/* ═══════════════════════════════════════════════════════════════════ */}
+          {/* TIER 2 — KEY EVIDENCE (default open)                               */}
+          {/* KEY FACTORS · MODEL INPUTS · SCORE MATRIX · FORM · H2H            */}
+          {/* AI OPPONENT ANALYSIS                                               */}
+          {/* ═══════════════════════════════════════════════════════════════════ */}
+          <ExpandableSection
+            title="Key Evidence"
+            open={insightOpen}
+            onToggle={() => setInsightOpen(o => !o)}
+          >
+            <div>
+              {pred?.lambdas && (
+                <WhyPrediction pred={pred} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
+              )}
+              {pred?.lambdas && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>Model inputs</span>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Over / Under — upcoming only */}
-          {pred?.overUnder && (
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <Zap size={13} color="var(--gold)" />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>OVER / UNDER</span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {[
-                  { label: 'Over 1.5', val: pred.overUnder.over15 },
-                  { label: 'Over 2.5', val: pred.overUnder.over25 },
-                  { label: 'Over 3.5', val: pred.overUnder.over35 },
-                ].map(({ label, val }) => (
-                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)', width: 56 }}>{label}</span>
-                    <div style={{ flex: 1, height: 6, background: 'var(--surface)', borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${val * 100}%`, background: 'var(--gold)', borderRadius: 3 }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', width: 36, textAlign: 'right' }}>
-                      {(val * 100).toFixed(0)}%
-                    </span>
+                  <XGPanel lambdas={pred.lambdas} strengths={pred.strengths} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
+                </div>
+              )}
+              {pred?.matrix && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>Score matrix</span>
                   </div>
-                ))}
-              </div>
+                  <ScoreMatrix matrix={pred.matrix} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
+                </div>
+              )}
+              {(homeForm.length > 0 || awayForm.length > 0) && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>Recent form</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                    <FormChart results={homeForm} teamName={match.homeTeam.shortName} />
+                    <FormChart results={awayForm} teamName={match.awayTeam.shortName} />
+                  </div>
+                </div>
+              )}
+              {!allMatches && homeForm.length === 0 && awayForm.length === 0 && (
+                <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'center' }}>
+                  <div className="spinner" style={{ width: 20, height: 20 }} />
+                </div>
+              )}
+              {!match.finished && opponentId && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>Head to head</span>
+                  </div>
+                  <H2HPanel
+                    h2h={h2hData ?? []}
+                    loading={h2hLoading}
+                    myTeamName={myTeam?.name ?? ''}
+                    myTeamShort={myTeam?.shortName ?? ''}
+                  />
+                </div>
+              )}
+              {!match.finished && opponentTeam && myTeam && (
+                <div style={{ padding: '0 16px 16px' }}>
+                  <FdOpponentAnalysis
+                    leagueId={leagueId}
+                    opponentId={opponentTeam.id}
+                    opponentName={opponentTeam.name}
+                    myTeamName={myTeam.name}
+                  />
+                </div>
+              )}
             </div>
-          )}
+          </ExpandableSection>
 
-          {/* Asian Handicap — upcoming only */}
-          {pred?.asianHandicap && (
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <Activity size={13} color="var(--gold)" />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>ASIAN HANDICAP</span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                {[
-                  { label: 'AH 0', home: pred.asianHandicap.level?.home, away: pred.asianHandicap.level?.away },
-                  { label: 'AH -0.5 / +0.5', home: pred.asianHandicap.homeMinus05, away: pred.asianHandicap.awayMinus05 },
-                  { label: 'AH -1.5 / +1.5', home: pred.asianHandicap.homeMinus15, away: pred.asianHandicap.awayPlus15 },
-                ].map(({ label, home, away }) => (
-                  <div key={label} style={{
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    padding: '8px 10px',
-                    textAlign: 'center',
-                  }}>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
-                    <div style={{ display: 'flex', justifyContent: 'space-around' }}>
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--blue, #60a5fa)' }}>{home != null ? `${(home * 100).toFixed(0)}%` : '–'}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Home</div>
+          {/* ═══════════════════════════════════════════════════════════════════ */}
+          {/* TIER 3 — MARKETS & CONDITIONS (default collapsed)                  */}
+          {/* OVER/UNDER · ASIAN HANDICAP · TOP SCORELINES                      */}
+          {/* ═══════════════════════════════════════════════════════════════════ */}
+          <ExpandableSection
+            title="Markets & Conditions"
+            open={marketsOpen}
+            onToggle={() => setMarketsOpen(o => !o)}
+            borderTop
+            isLast
+          >
+            {/* Tier 3 sits at slightly lower visual emphasis than Key Evidence */}
+            <div style={{ opacity: 0.92 }}>
+              {predLoading && (
+                <div style={{ padding: '20px 16px', display: 'flex', justifyContent: 'center' }}>
+                  <div className="spinner" style={{ width: 20, height: 20 }} />
+                </div>
+              )}
+              {!predLoading && pred?.overUnder && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>Over / under</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {[
+                      { label: 'Over 1.5', val: pred.overUnder.over15 },
+                      { label: 'Over 2.5', val: pred.overUnder.over25 },
+                      { label: 'Over 3.5', val: pred.overUnder.over35 },
+                    ].map(({ label, val }) => {
+                      const pct      = val * 100;
+                      const barColor = pct >= 65 ? 'var(--green)' : pct >= 45 ? 'var(--gold)' : 'rgba(255,255,255,0.18)';
+                      const txtColor = pct >= 65 ? 'var(--green)' : pct >= 45 ? 'var(--gold)' : 'var(--text-muted)';
+                      return (
+                        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)', width: 56, flexShrink: 0 }}>{label}</span>
+                          <div style={{ flex: 1, height: 6, background: 'var(--surface2)', borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: barColor,
+                                          borderRadius: 3, transition: 'width 0.35s cubic-bezier(0.4,0,0.2,1)' }} />
+                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: txtColor, width: 36, textAlign: 'right' }}>
+                            {pct.toFixed(0)}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {!predLoading && pred?.asianHandicap && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>Asian handicap</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                    {[
+                      { label: 'AH 0',           home: pred.asianHandicap.level?.home,  away: pred.asianHandicap.level?.away  },
+                      { label: 'AH -0.5 / +0.5', home: pred.asianHandicap.homeMinus05,  away: pred.asianHandicap.awayMinus05  },
+                      { label: 'AH -1.5 / +1.5', home: pred.asianHandicap.homeMinus15,  away: pred.asianHandicap.awayPlus15   },
+                    ].map(({ label, home, away }) => (
+                      <div key={label} style={{
+                        background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.05)',
+                        borderRadius: 8, padding: '8px 10px', textAlign: 'center',
+                      }}>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-around' }}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#7aadff' }}>
+                              {home != null ? `${(home * 100).toFixed(0)}%` : '–'}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Home</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#e07878' }}>
+                              {away != null ? `${(away * 100).toFixed(0)}%` : '–'}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Away</div>
+                          </div>
+                        </div>
+                        {home != null && away != null && (
+                          <div style={{ display: 'flex', gap: 2, borderRadius: 3, overflow: 'hidden', height: 4, marginTop: 8 }}>
+                            <div style={{ flex: Math.round(home * 100), background: '#7aadff',
+                                          transition: 'flex 0.35s cubic-bezier(0.4,0,0.2,1)', minWidth: 2 }} />
+                            <div style={{ flex: Math.round(away * 100), background: '#e07878',
+                                          transition: 'flex 0.35s cubic-bezier(0.4,0,0.2,1)', minWidth: 2 }} />
+                          </div>
+                        )}
                       </div>
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-muted)' }}>{away != null ? `${(away * 100).toFixed(0)}%` : '–'}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Away</div>
-                      </div>
-                    </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
+              {!predLoading && pred?.topScores?.length > 0 && (
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', opacity: 0.6 }}>Top scorelines</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                    {pred.topScores.slice(0, 6).map(({ score, prob }) => (
+                      <div key={score} style={{
+                        background: 'var(--surface)', border: '1px solid rgba(255,255,255,0.05)',
+                        borderRadius: 8, padding: '8px 10px',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      }}>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)' }}>{score}</span>
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{(prob * 100).toFixed(1)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Fallback: only shown when no market data is available at all */}
+              {!predLoading && !pred?.overUnder && (
+                <div style={{ padding: '20px 16px', textAlign: 'center', fontSize: 13, color: 'var(--text-muted)' }}>
+                  Market data unavailable
+                </div>
+              )}
             </div>
-          )}
-
-          {/* H2H — upcoming + perspective team only */}
-          {!match.finished && opponentId && (
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <GitMerge size={13} color="var(--gold)" />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>HEAD TO HEAD</span>
-              </div>
-              <H2HPanel
-                h2h={h2hData ?? []}
-                loading={h2hLoading}
-                myTeamName={myTeam?.name ?? ''}
-                myTeamShort={myTeam?.shortName ?? ''}
-              />
-            </div>
-          )}
-
-          {/* Recent form — both sections */}
-          {(homeForm.length > 0 || awayForm.length > 0) && (
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
-                <Activity size={13} color="var(--gold)" />
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1 }}>RECENT FORM</span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                <FormChart results={homeForm} teamName={match.homeTeam.shortName} />
-                <FormChart results={awayForm} teamName={match.awayTeam.shortName} />
-              </div>
-            </div>
-          )}
-
-          {/* Loading spinner while allMatches arrives */}
-          {!allMatches && homeForm.length === 0 && awayForm.length === 0 && (
-            <div style={{ padding: '14px 16px', display: 'flex', justifyContent: 'center' }}>
-              <div className="spinner" style={{ width: 20, height: 20 }} />
-            </div>
-          )}
-
-          {/* AI opponent analysis — upcoming + perspective team only */}
-          {!match.finished && opponentTeam && myTeam && (
-            <div style={{ padding: '0 16px 16px' }}>
-              <FdOpponentAnalysis
-                leagueId={leagueId}
-                opponentId={opponentTeam.id}
-                opponentName={opponentTeam.name}
-                myTeamName={myTeam.name}
-              />
-            </div>
-          )}
+          </ExpandableSection>
         </div>
       )}
     </div>
@@ -636,7 +649,7 @@ export default function FdFixtures() {
 
   const [selectedTeamId, setSelectedTeamId] = useState(null);
 
-  const { data: fixtures, loading: fLoading, error: fError } = useFetch(`/api/fd/fixtures?league=${leagueId}`);
+  const { data: fixtures, loading: fLoading, error: fError, refresh: refreshFixtures } = useFetch(`/api/fd/fixtures?league=${leagueId}`);
 
   // Derive sorted unique team list from fixtures
   const teams = useMemo(() => {
@@ -684,7 +697,7 @@ export default function FdFixtures() {
           <div>Loading {league.name} fixtures…</div>
         </div>
       )}
-      {error && <div className="error-card">Failed to load: {error}</div>}
+      {error && <ErrorCard message={error} onRetry={refreshFixtures} />}
 
       {!loading && !error && upcomingMatches.length === 0 && (
         <div className="card" style={{ textAlign: 'center', padding: 32 }}>

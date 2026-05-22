@@ -1,9 +1,60 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { getLeague } from '../utils/leagues.jsx';
 import { useFavouriteTeam, writeFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { TopScorers, LeagueStats, FormTable } from './FdStats';
+import { ErrorCard } from '../components/ui/ErrorCard';
+import { Crest }     from '../components/ui/Crest';
+
+// ─── How Predictions Work (FD edition) ───────────────────────────────────────
+// Same .hiw-* CSS pattern as League.jsx — wording adapted for non-PL leagues.
+const HowItWorksPanel = memo(function HowItWorksPanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        className="hiw-toggle"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-controls="hiw-panel-fd"
+      >
+        <span aria-hidden>ℹ️</span>
+        How predictions work
+        <span style={{ fontSize: 10, transition: 'transform 0.2s', display: 'inline-block',
+          transform: open ? 'rotate(180deg)' : 'none' }} aria-hidden>▾</span>
+      </button>
+      {open && (
+        <div id="hiw-panel-fd" className="hiw-panel" role="region" aria-label="How predictions work">
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+            Model methodology
+          </div>
+          <div className="hiw-grid">
+            <div className="hiw-item">
+              <div className="hiw-label">⚡ Team strength</div>
+              <div className="hiw-desc">ELO ratings updated after each result, weighted by opponent quality and recency.</div>
+            </div>
+            <div className="hiw-item">
+              <div className="hiw-label">📈 Recent form</div>
+              <div className="hiw-desc">Last 5–10 results nudge expected goals by up to ±5%, capturing in-season momentum.</div>
+            </div>
+            <div className="hiw-item">
+              <div className="hiw-label">🎯 Goals model</div>
+              <div className="hiw-desc">Attack &amp; defence ratings produce expected goals (λ). Poisson + Dixon-Coles gives full scoreline probabilities.</div>
+            </div>
+            <div className="hiw-item">
+              <div className="hiw-label">🔄 Season projection</div>
+              <div className="hiw-desc">Every remaining fixture simulated using the model. "Proj." = median expected final total.</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 10, fontSize: 10, color: '#374151', fontStyle: 'italic' }}>
+            For entertainment only · predictions update when new data arrives · data via football-data.org
+          </div>
+        </div>
+      )}
+    </>
+  );
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,17 +94,17 @@ function FormDots({ form }) {
 // ─── Predicted table ──────────────────────────────────────────────────────────
 
 function PredictedTable({ leagueId, favId }) {
-  const { data: rows, loading, error } = useFetch(`/api/fd/predicted-table?league=${leagueId}`);
+  const { data: rows, loading, error, refresh } = useFetch(`/api/fd/predicted-table?league=${leagueId}`);
 
   if (loading) return <div className="loading-card"><div className="spinner" /><div>Simulating season…</div></div>;
-  if (error)   return <div className="error-card">Failed to load: {error}</div>;
+  if (error)   return <ErrorCard message={error} onRetry={refresh} />;
   if (!rows?.length) return null;
 
   const totalTeams = rows.length;
 
   return (
-    <div className="card" style={{ padding: '12px 4px' }}>
-      <div style={{ padding: '0 8px 10px', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+    <div className="card" style={{ padding: '12px 0' }}>
+      <div style={{ padding: '0 12px 10px', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
         Projected final standings — current points + expected points from remaining fixtures using the prediction model.
       </div>
       <div style={{ overflowX: 'auto' }}>
@@ -80,10 +131,7 @@ function PredictedTable({ leagueId, favId }) {
                   </td>
                   <td style={{ fontWeight: isFav ? 700 : 400 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {team.crest && (
-                        <img src={team.crest} alt={team.shortName}
-                          style={{ width: 18, height: 18, objectFit: 'contain', flexShrink: 0 }} />
-                      )}
+                      <Crest src={team.crest} alt={team.shortName} size={18} />
                       <span style={{
                         color: isFav ? 'var(--gold)' : 'var(--text)', fontSize: 13,
                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 110,
@@ -133,7 +181,7 @@ export default function FdLeague() {
   const favTeam = useFavouriteTeam();
   const favId   = favTeam?.id ?? null;
 
-  const { data: rows, loading, error } = useFetch(`/api/fd/standings?league=${leagueId}`);
+  const { data: rows, loading, error, refresh } = useFetch(`/api/fd/standings?league=${leagueId}`);
 
   function toggleFav(teamId) {
     if (favId === teamId) {
@@ -189,6 +237,11 @@ export default function FdLeague() {
         <button className={`tab-btn${tab === 'form'      ? ' active' : ''}`} onClick={() => setTab('form')}>Form</button>
       </div>
 
+      {/* Trust layer — same pattern as PL League.jsx */}
+      <div style={{ marginBottom: 8 }}>
+        <HowItWorksPanel />
+      </div>
+
       {tab === 'predicted' && <PredictedTable leagueId={leagueId} favId={favId} />}
       {tab === 'scorers'   && <TopScorers  leagueId={leagueId} />}
       {tab === 'stats'     && <LeagueStats leagueId={leagueId} />}
@@ -200,15 +253,15 @@ export default function FdLeague() {
           <div>Loading {league.name} table…</div>
         </div>
       )}
-      {tab === 'live' && error && <div className="error-card">Failed to load standings: {error}</div>}
+      {tab === 'live' && error && <ErrorCard message={error} onRetry={refresh} />}
 
       {tab === 'live' && !loading && !error && rows && (
-        <div className="card" style={{ padding: '12px 4px' }}>
+        <div className="card" style={{ padding: '12px 0', border: '1px solid rgba(255,255,255,0.08)' }}>
           {/* Sort controls */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 10, paddingLeft: 8 }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10, paddingLeft: 8, flexWrap: 'wrap' }}>
             {sortBtn('points', 'Points')}
-            {sortBtn('gf',     'Goals scored')}
-            {sortBtn('ga',     'Goals conceded')}
+            {sortBtn('gf', 'Goals scored')}
+            {sortBtn('ga', 'Goals conceded')}
           </div>
 
           <div style={{ overflowX: 'auto' }}>
@@ -217,15 +270,15 @@ export default function FdLeague() {
                 <tr>
                   <th>#</th>
                   <th>Team</th>
-                  <th style={{ textAlign: 'center' }}>P</th>
-                  <th style={{ textAlign: 'center' }}>W</th>
-                  <th style={{ textAlign: 'center' }}>D</th>
-                  <th style={{ textAlign: 'center' }}>L</th>
-                  <th style={{ textAlign: 'center', color: sortBy === 'gf' ? 'var(--gold)' : undefined }}>GF</th>
-                  <th style={{ textAlign: 'center', color: sortBy === 'ga' ? 'var(--gold)' : undefined }}>GA</th>
-                  <th style={{ textAlign: 'center' }}>GD</th>
-                  <th style={{ textAlign: 'center', color: sortBy === 'points' ? 'var(--gold)' : undefined }}>Pts</th>
-                  {hasForm && <th style={{ textAlign: 'center' }}>Form</th>}
+                  <th style={{ textAlign: 'center', color: 'var(--gold)', fontWeight: 700 }}>Pts</th>
+                  <th style={{ textAlign: 'center', opacity: 0.6 }}>P</th>
+                  <th style={{ textAlign: 'center', opacity: 0.6 }}>W</th>
+                  <th style={{ textAlign: 'center', opacity: 0.6 }}>D</th>
+                  <th style={{ textAlign: 'center', opacity: 0.6 }}>L</th>
+                  <th style={{ textAlign: 'center', opacity: sortBy === 'gf' ? 1 : 0.6, color: sortBy === 'gf' ? 'var(--gold)' : undefined }}>GF</th>
+                  <th style={{ textAlign: 'center', opacity: sortBy === 'ga' ? 1 : 0.6, color: sortBy === 'ga' ? 'var(--gold)' : undefined }}>GA</th>
+                  <th style={{ textAlign: 'center', opacity: 0.6 }}>GD</th>
+                  {hasForm && <th style={{ textAlign: 'center', opacity: 0.6 }}>Form</th>}
                 </tr>
               </thead>
               <tbody>
@@ -247,13 +300,7 @@ export default function FdLeague() {
                       </td>
                       <td style={{ fontWeight: isFav ? 700 : 400 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {team.crest && (
-                            <img
-                              src={team.crest}
-                              alt={team.shortName}
-                              style={{ width: 18, height: 18, objectFit: 'contain', flexShrink: 0 }}
-                            />
-                          )}
+                          <Crest src={team.crest} alt={team.shortName} size={18} />
                           <span style={{
                             color: isFav ? 'var(--gold)' : 'var(--text)', fontSize: 13,
                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 130,
@@ -266,34 +313,25 @@ export default function FdLeague() {
                           {isFav && <span style={{ fontSize: 10, color: 'var(--gold)' }}>★</span>}
                         </div>
                       </td>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: isFav ? 'var(--gold)' : 'var(--text)' }}>
+                        {team.points}
+                      </td>
                       <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{team.played}</td>
                       <td style={{ textAlign: 'center', color: 'var(--green)' }}>{team.won}</td>
                       <td style={{ textAlign: 'center', color: 'var(--draw)' }}>{team.drawn}</td>
                       <td style={{ textAlign: 'center', color: 'var(--red)' }}>{team.lost}</td>
                       <td style={{
-                        textAlign: 'center',
-                        fontWeight: sortBy === 'gf' ? 700 : 400,
+                        textAlign: 'center', fontWeight: sortBy === 'gf' ? 700 : 400,
                         color: sortBy === 'gf' ? 'var(--text)' : 'var(--text-muted)',
-                      }}>
-                        {team.goalsFor}
-                      </td>
+                      }}>{team.goalsFor}</td>
                       <td style={{
-                        textAlign: 'center',
-                        fontWeight: sortBy === 'ga' ? 700 : 400,
+                        textAlign: 'center', fontWeight: sortBy === 'ga' ? 700 : 400,
                         color: sortBy === 'ga' ? 'var(--text)' : 'var(--text-muted)',
-                      }}>
-                        {team.goalsAgainst}
-                      </td>
+                      }}>{team.goalsAgainst}</td>
                       <td style={{ textAlign: 'center' }}>
                         <span style={{ color: team.gd >= 0 ? 'var(--green)' : 'var(--red)' }}>
                           {team.gd >= 0 ? '+' : ''}{team.gd}
                         </span>
-                      </td>
-                      <td style={{
-                        textAlign: 'center', fontWeight: 700,
-                        color: isFav ? 'var(--gold)' : 'var(--text)',
-                      }}>
-                        {team.points}
                       </td>
                       {hasForm && <td style={{ textAlign: 'center' }}><FormDots form={team.form} /></td>}
                     </tr>
@@ -303,11 +341,14 @@ export default function FdLeague() {
             </table>
           </div>
 
-          <div style={{ padding: '10px 12px 0', fontSize: 11, color: 'var(--text-muted)' }}>
+          <div style={{
+            padding: '8px 12px 4px', fontSize: 11, color: 'var(--text-muted)',
+            borderTop: '1px solid rgba(255,255,255,0.07)', marginTop: 8,
+          }}>
             <span style={{ color: 'var(--blue-light)', fontWeight: 700 }}>■</span> UCL &nbsp;
-            <span style={{ color: 'var(--green)', fontWeight: 700 }}>■</span> UEL/Europa &nbsp;
-            <span style={{ color: 'var(--red)', fontWeight: 700 }}>■</span> Relegation
-            <span style={{ marginLeft: 12 }}>Tap a team to pin ★ · Data: football-data.org</span>
+            <span style={{ color: 'var(--green)', fontWeight: 700 }}>■</span> UEL &nbsp;
+            <span style={{ color: 'var(--red)', fontWeight: 700 }}>■</span> Rel.
+            <span style={{ marginLeft: 10, opacity: 0.7 }}>Tap row to pin ★</span>
           </div>
         </div>
       )}

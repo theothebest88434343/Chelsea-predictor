@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { format, parseISO, isValid } from 'date-fns';
 import { useSeasonAccuracy, usePerformanceMetrics, useBettingSim, useTrackerHistory } from '../hooks/useHistory';
+import { useFetch } from '../hooks/useFetch';
 import ClubBadge from '../components/ClubBadge';
 import { getLeague } from '../utils/leagues.jsx';
 import { TopScorers, LeagueStats, FormTable } from './FdStats';
@@ -331,35 +332,174 @@ function PredictionRow({ p }) {
   );
 }
 
+// Fetches live predictions for all unplayed fixtures in a given FD matchday.
+// Used as a fallback in TrackerHistory when the current matchday has no settled results.
+function useFdMatchdayPredictions(leagueId, matchday, enabled) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled || !leagueId || !matchday) { setData(null); return; }
+    let cancelled = false;
+    setLoading(true);
+
+    fetch(`/api/fd/fixtures?league=${leagueId}`)
+      .then(r => r.json())
+      .then(j => {
+        if (cancelled) return;
+        const fixtures = (Array.isArray(j) ? j : j.fixtures ?? [])
+          .filter(f => f.matchday === matchday && !f.finished);
+        return Promise.all(
+          fixtures.map(f =>
+            fetch(`/api/fd/predictions?league=${leagueId}&fixtureId=${f.id}`)
+              .then(r => r.ok ? r.json() : null)
+              .catch(() => null)
+              .then(pred => pred?.prediction ? {
+                fixtureId:  f.id,
+                gameweek:   f.matchday,
+                kickoff:    f.kickoffTime,
+                homeTeam:   f.homeTeam,
+                awayTeam:   f.awayTeam,
+                prediction: pred.prediction,
+                result:     null,
+              } : null)
+          )
+        );
+      })
+      .then(rows => {
+        if (!cancelled) { setData((rows ?? []).filter(Boolean)); setLoading(false); }
+      })
+      .catch(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [leagueId, matchday, enabled]);
+
+  return { data, loading };
+}
+
 function TrackerHistory({ leagueId }) {
   const { data, loading } = useTrackerHistory(leagueId);
   const [selectedGW, setSelectedGW] = useState(null);
   const isPL = leagueId === 'premier-league';
   const gwLabel = isPL ? 'Gameweek' : 'Matchday';
 
+  // Derive the actual current GW/matchday from the highest number in stored predictions
+  // (data.currentGW from server can lag behind the actual week).
+  const serverGW = data?.currentGW ?? null;
+  const liveGW = data
+    ? (Math.max(serverGW ?? 0, ...(data.predictions ?? []).map(p => p.gameweek ?? 0)) || null)
+    : null;
+
+  // PL: single bulk endpoint for the whole gameweek
+  const { data: livePredData, loading: liveLoadingPL } = useFetch(
+    isPL && liveGW ? `/api/predict-gameweek?gw=${liveGW}` : null
+  );
+
+  // FD leagues: parallel per-fixture fetch for current matchday
+  // (enabled only when we know there are no settled results — determined below)
+  // We always call the hook but pass enabled=false until we know we need it.
+  // We'll override with the real value after processing; use a ref-like approach
+  // by always calling with the computed matchday and gating on showLiveFallback.
+  const { data: fdLiveData, loading: liveLoadingFD } = useFdMatchdayPredictions(
+    !isPL ? leagueId : null,
+    liveGW,
+    !isPL && !!liveGW  // always attempt for FD; we'll display only if needed
+  );
+
+  const liveLoading = isPL ? liveLoadingPL : liveLoadingFD;
+
   if (loading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
 
   const all = data?.predictions ?? [];
 
-  if (!all.length) return (
-    <div className="card">
-      <div className="card-title">History</div>
-      <div className="text-muted fs-13" style={{ padding: '8px 0' }}>
-        No predictions yet — auto-saved whenever a fixture is loaded.
-      </div>
-    </div>
-  );
-
+  // Build GW map from stored history
   const byGW = [];
   const gwMap = new Map();
   for (const p of all) {
     const gw = p.gameweek ?? 0;
-    // Skip GW0/null; for PL also skip GW1 (pre-season anomaly)
     if (!gw || (isPL && gw === 1)) continue;
     if (!gwMap.has(gw)) { gwMap.set(gw, []); byGW.push(gw); }
     gwMap.get(gw).push(p);
   }
   byGW.sort((a, b) => b - a);
+  const maxGW = byGW[0] ?? serverGW ?? 0;
+
+  // Deduplicate current GW: keep only the most-recently-tracked batch (within 2h)
+  // to handle predictions saved twice from different data sources.
+  const currentRows = gwMap.get(maxGW) ?? [];
+  if (currentRows.length > 0) {
+    const maxTracked = Math.max(...currentRows.map(p => safeDate(p.trackedAt)?.getTime() ?? 0));
+    if (maxTracked > 0) {
+      const twoHours = 2 * 60 * 60 * 1000;
+      gwMap.set(maxGW, currentRows.filter(p => {
+        const t = safeDate(p.trackedAt)?.getTime();
+        return !t || t >= maxTracked - twoHours;
+      }));
+    }
+  }
+
+  // Strip unsettled rows from every GW; hide GWs with nothing remaining.
+  for (const gw of byGW) {
+    gwMap.set(gw, gwMap.get(gw).filter(p => p.result));
+  }
+  const filtered = byGW.filter(gw => gwMap.get(gw).length > 0);
+  byGW.length = 0;
+  filtered.forEach(gw => byGW.push(gw));
+
+  // If the current GW has no settled results yet, use live predictions so History
+  // stays consistent with the Fixtures tab.
+  const currentGWSettled = byGW[0] === maxGW;
+  const showLiveFallback = !currentGWSettled && liveGW;
+
+  if (showLiveFallback) {
+    if (liveLoading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
+
+    // PL uses the bulk gameweek endpoint; FD uses per-fixture parallel fetches
+    const rawLive = isPL
+      ? (livePredData ?? []).map(f => ({
+          fixtureId:  f.fixtureId,
+          gameweek:   f.gameweek,
+          kickoff:    f.kickoff,
+          homeTeam:   f.homeTeam,
+          awayTeam:   f.awayTeam,
+          prediction: f.prediction,
+          result:     null,
+        }))
+      : (fdLiveData ?? []);
+
+    const liveRows = rawLive.sort((a, b) => {
+      const da = safeDate(a.kickoff), db = safeDate(b.kickoff);
+      return da && db ? da - db : 0;
+    });
+
+    return (
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <div className="card-title" style={{ margin: 0 }}>History</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            {gwLabel} {maxGW} · live predictions
+          </div>
+        </div>
+        {liveRows.length === 0 ? (
+          <div className="text-muted fs-13" style={{ padding: '8px 0' }}>
+            No predictions available yet.
+          </div>
+        ) : (
+          liveRows.map((p, i) => <PredictionRow key={p.fixtureId ?? i} p={p} />)
+        )}
+      </div>
+    );
+  }
+
+  if (!byGW.length) return (
+    <div className="card">
+      <div className="card-title">History</div>
+      <div className="text-muted fs-13" style={{ padding: '8px 0' }}>
+        No predictions tracked yet — auto-saved whenever a fixture is loaded.
+      </div>
+    </div>
+  );
+
   for (const gw of byGW) {
     gwMap.get(gw).sort((a, b) => {
       const da = safeDate(a.kickoff), db = safeDate(b.kickoff);
@@ -369,8 +509,6 @@ function TrackerHistory({ leagueId }) {
       return da - db;
     });
   }
-
-  const serverGW = data?.currentGW ?? null;
 
   // Find the gameweek in history whose median kickoff is closest to now.
   // This works even when the server's currentGW isn't in gwMap yet (no predictions
@@ -389,8 +527,8 @@ function TrackerHistory({ leagueId }) {
     if (dist < bestDist) { bestDist = dist; bestGW = gw; }
   }
 
-  // Prefer server's currentGW if it exists in history, otherwise use date-based pick
-  const currentGW = serverGW && gwMap.has(serverGW) ? serverGW : bestGW;
+  // Prefer server's currentGW only if it survived the settled filter, otherwise date-based pick
+  const currentGW = serverGW && byGW.includes(serverGW) ? serverGW : bestGW;
   const activeGW = selectedGW ?? currentGW;
   const rows = gwMap.get(activeGW) ?? [];
 

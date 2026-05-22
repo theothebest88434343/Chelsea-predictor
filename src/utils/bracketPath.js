@@ -73,25 +73,40 @@ function safeDivide(a, b) {
   return Math.min(a / b, 1);
 }
 
-/** Get the expected finishing position for a team from groupPredictedStandings. */
+/**
+ * Get the expected finishing position for a team.
+ * Primary: groupPredictedStandings (model output).
+ * Fallback: hardcodedGroups array order (index 0 = assumed 1st).
+ */
 function teamGroupPos(team, hardcodedGroups, groupPredictedStandings) {
   for (const [letter, teams] of Object.entries(hardcodedGroups ?? {})) {
     if (!teams.includes(team)) continue;
     const standings = groupPredictedStandings?.[letter] ?? [];
     const idx       = standings.findIndex(r => r.team === team);
-    return { group: letter, pos: idx >= 0 ? idx + 1 : 1 };
+    if (idx >= 0) return { group: letter, pos: idx + 1 };
+    // Fallback: standings missing — use hardcodedGroups array order capped at pos 1
+    // (safe assumption: treat every team as a potential group winner for bracket routing)
+    return { group: letter, pos: 1 };
   }
   return { group: null, pos: 1 };
 }
 
 /**
- * Get the top team from a given group at a given expected position,
- * sorted by their pAdvance probability from tournamentReach.
+ * Get the top team from a given group at a given expected position.
+ * Primary:  groupPredictedStandings[group][expectedPos - 1]
+ * Fallback: hardcodedGroups[group][expectedPos - 1]  (raw array order)
  */
-function topTeamAtPos(group, expectedPos, groupPredictedStandings, tournamentReach) {
+function topTeamAtPos(group, expectedPos, groupPredictedStandings, tournamentReach, hardcodedGroups) {
   const standings = groupPredictedStandings?.[group] ?? [];
-  const entry     = standings[expectedPos - 1]; // 1-indexed → 0-indexed
+  let entry = standings[expectedPos - 1]; // 1-indexed → 0-indexed
+
+  // Fallback: if standings data is absent, use the raw group list
+  if (!entry && hardcodedGroups?.[group]) {
+    const rawTeam = hardcodedGroups[group][expectedPos - 1];
+    if (rawTeam) entry = { team: rawTeam };
+  }
   if (!entry) return null;
+
   return {
     team: entry.team,
     prob: tournamentReach?.[entry.team]?.pAdvance ?? 0,
@@ -163,35 +178,41 @@ export function getKnockoutPath(team, hardcodedGroups, groupPredictedStandings, 
   const posCode = group && pos ? `${group}${pos}` : null;
   if (posCode && fixedR32[posCode]) {
     const [oppGroup, oppPos] = fixedR32[posCode];
-    r32Opp = topTeamAtPos(oppGroup, oppPos, groupPredictedStandings, tournamentReach);
+    r32Opp = topTeamAtPos(oppGroup, oppPos, groupPredictedStandings, tournamentReach, hardcodedGroups);
   } else if (pos === 1 && group && 'ABCDEFGH'.includes(group)) {
     r32Note = 'Best 3rd Place qualifier';
   }
 
   // ── R16 opponent ────────────────────────────────────────────────────────────
   // Top team in the same R16 section (the other R32 slot within the section).
-  let r16Opp = null;
+  // Fallback: show TBD note if section is genuinely empty.
+  let r16Opp  = null;
+  let r16Note = null;
   if (r16Section != null) {
     const sectionTeams = teamsInR16Section(r16Section, hardcodedGroups, groupPredictedStandings, tournamentReach, 'pR16');
     r16Opp = sectionTeams.find(t => t.team !== team) ?? null;
   }
+  if (!r16Opp) r16Note = 'TBD';
 
   // ── QF opponent ─────────────────────────────────────────────────────────────
   // Top team from the adjacent R16 section within the same QF.
-  let qfOpp = null;
+  let qfOpp  = null;
+  let qfNote = null;
   if (qfSection != null && r16Section != null) {
-    const adjSection   = QF_PAIRS[qfSection].find(s => s !== r16Section);
+    const adjSection = QF_PAIRS[qfSection].find(s => s !== r16Section);
     if (adjSection != null) {
       const adjTeams = teamsInR16Section(adjSection, hardcodedGroups, groupPredictedStandings, tournamentReach, 'pQF');
       qfOpp          = adjTeams[0] ?? null;
     }
   }
+  if (!qfOpp) qfNote = 'TBD';
 
   // ── SF opponent ─────────────────────────────────────────────────────────────
   // Top team from the adjacent QF within the same SF half.
-  let sfOpp = null;
+  let sfOpp  = null;
+  let sfNote = null;
   if (sfHalf != null && qfSection != null) {
-    const adjQF      = SF_PAIRS[sfHalf].find(q => q !== qfSection);
+    const adjQF = SF_PAIRS[sfHalf].find(q => q !== qfSection);
     if (adjQF != null) {
       const adjSections = QF_PAIRS[adjQF];
       const candidates  = [
@@ -201,14 +222,16 @@ export function getKnockoutPath(team, hardcodedGroups, groupPredictedStandings, 
       sfOpp = candidates[0] ?? null;
     }
   }
+  if (!sfOpp) sfNote = 'TBD';
 
   // ── Final opponent ──────────────────────────────────────────────────────────
   // Top team from the opposite SF half.
-  let finalOpp = null;
+  let finalOpp  = null;
+  let finalNote = null;
   if (sfHalf != null) {
-    const otherHalf   = sfHalf === 0 ? 1 : 0;
-    const otherQFs    = SF_PAIRS[otherHalf];
-    const candidates  = [
+    const otherHalf = sfHalf === 0 ? 1 : 0;
+    const otherQFs  = SF_PAIRS[otherHalf];
+    const candidates = [
       ...teamsInR16Section(QF_PAIRS[otherQFs[0]][0], hardcodedGroups, groupPredictedStandings, tournamentReach, 'pFinal'),
       ...teamsInR16Section(QF_PAIRS[otherQFs[0]][1], hardcodedGroups, groupPredictedStandings, tournamentReach, 'pFinal'),
       ...teamsInR16Section(QF_PAIRS[otherQFs[1]][0], hardcodedGroups, groupPredictedStandings, tournamentReach, 'pFinal'),
@@ -216,6 +239,7 @@ export function getKnockoutPath(team, hardcodedGroups, groupPredictedStandings, 
     ].sort((a, b) => b.prob - a.prob);
     finalOpp = candidates.find(t => t.team !== team) ?? null;
   }
+  if (!finalOpp) finalNote = 'TBD';
 
   // ── Build stage list ────────────────────────────────────────────────────────
   const stages = [
@@ -231,28 +255,28 @@ export function getKnockoutPath(team, hardcodedGroups, groupPredictedStandings, 
       cumProb:  reach.pQF  ?? 0,
       prevProb: reach.pR16 ?? 0,
       condProb: safeDivide(reach.pQF, reach.pR16),
-      opponent: r16Opp, opponentNote: null,
+      opponent: r16Opp, opponentNote: r16Note,
     },
     {
       id: 'qf', label: 'Quarter-Final',
       cumProb:  reach.pSF  ?? 0,
       prevProb: reach.pQF  ?? 0,
       condProb: safeDivide(reach.pSF, reach.pQF),
-      opponent: qfOpp, opponentNote: null,
+      opponent: qfOpp, opponentNote: qfNote,
     },
     {
       id: 'sf', label: 'Semi-Final',
       cumProb:  reach.pFinal ?? 0,
       prevProb: reach.pSF    ?? 0,
       condProb: safeDivide(reach.pFinal, reach.pSF),
-      opponent: sfOpp, opponentNote: null,
+      opponent: sfOpp, opponentNote: sfNote,
     },
     {
       id: 'final', label: 'Final',
       cumProb:  reach.pWinner ?? 0,
       prevProb: reach.pFinal  ?? 0,
       condProb: safeDivide(reach.pWinner, reach.pFinal),
-      opponent: finalOpp, opponentNote: null,
+      opponent: finalOpp, opponentNote: finalNote,
     },
   ];
 

@@ -522,3 +522,233 @@ html, body {
 @media (min-width: 720px) {
   .page-content { padding: 20px 24px calc(var(--nav-h) + 20px); }
 }
+
+/* ── MatchCard responsive layout (CSS Grid, no JS, no display:contents) ──── */
+/*
+ * Mobile  (default): 2-row grid — score spans full top row, teams side-by-side below.
+ * Desktop (≥500px):  3-column grid — home | score | away in a single row.
+ *
+ * Using CSS Grid instead of display:contents preserves each element's containing
+ * box, which keeps transform / transformOrigin on TeamSlot working correctly.
+ */
+.mc-hero          { padding: 12px 14px 14px; }
+.mc-hero-row      {
+  display: grid;
+  grid-template-areas: "score score"
+                       "home  away";
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 10px 0;
+}
+.mc-score-wrap    { grid-area: score; text-align: center; }
+.mc-team-slot     { grid-area: home; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.mc-team-slot-r   { grid-area: away; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; }
+.mc-team-name     { font-size: 15px; line-height: 1.2; }
+.mc-score-val     { font-family: 'Bebas Neue', sans-serif; font-size: 44px; letter-spacing: 4px; color: #fff; line-height: 1; }
+.mc-score-ft      { font-family: 'Bebas Neue', sans-serif; font-size: 44px; letter-spacing: 4px; color: var(--text); line-height: 1; }
+
+@media (min-width: 500px) {
+  /* Desktop: 3-column grid — home | score | away */
+  .mc-hero        { padding: 14px; }
+  .mc-hero-row    {
+    grid-template-areas: "home score away";
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0;
+  }
+  .mc-team-slot   { flex-direction: row;         text-align: left;  align-items: center; gap: 8px; }
+  .mc-team-slot-r { flex-direction: row-reverse; text-align: right; align-items: center; gap: 8px; }
+  .mc-team-name   { font-size: 17px; }
+  .mc-score-val   { font-size: 36px; }
+  .mc-score-ft    { font-size: 36px; }
+}
+
+/* ── PathToFinal responsive flow ──────────────────────────────────────────── */
+/*
+ * --ptf-conn-dir controls the gradient direction inside ConnectorLine.
+ * It MUST be set here (not inline) so the @media rule can override it.
+ * Inline CSS variables have higher specificity than stylesheet rules and
+ * cannot be overridden by media queries.
+ */
+/* Default = mobile: vertical column */
+.ptf-flow         { display: flex; flex-direction: column; align-items: center; gap: 0; }
+.ptf-connector    { --ptf-conn-dir: to bottom; width: 3px; min-height: 28px; flex: 0 0 28px; border-radius: 3px; align-self: center; margin: 0 auto; }
+.ptf-node         { width: 100%; max-width: 220px; }
+
+@media (min-width: 560px) {
+  /* Desktop: horizontal row */
+  .ptf-flow       { flex-direction: row; align-items: flex-start; }
+  .ptf-connector  { --ptf-conn-dir: to right; width: auto; height: 3px; min-height: unset; flex: 1 1 0; min-width: 12px; margin: auto 0; }
+  .ptf-node       { width: auto; max-width: 108px; flex: 1 1 0; min-width: 72px; }
+}
+
+/* ── Skeleton loader ──────────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.04) 25%,
+    rgba(255,255,255,0.09) 50%,
+    rgba(255,255,255,0.04) 75%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+/* MatchCard skeleton */
+.skel-matchcard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.skel-meta    { height: 14px; width: 120px; margin-bottom: 14px; }
+.skel-hero    { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.skel-team    { height: 20px; flex: 1; border-radius: 4px; }
+.skel-score   { height: 36px; width: 70px; border-radius: 4px; }
+.skel-bar     { height: 6px;  width: 100%; margin-bottom: 10px; border-radius: 4px; }
+.skel-text    { height: 12px; width: 90%; margin-bottom: 6px; border-radius: 4px; }
+.skel-text-s  { height: 12px; width: 60%; border-radius: 4px; }
+
+/* PathToFinal skeleton */
+.skel-ptf     { display: flex; gap: 8px; align-items: flex-start; }
+.skel-ptf-node{ flex: 1; height: 80px; border-radius: 10px; }
+
+/* GroupTable skeleton */
+.skel-group   { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; }
+.skel-row     { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.skel-pos     { height: 14px; width: 16px; border-radius: 3px; }
+.skel-flag    { height: 20px; width: 24px; border-radius: 3px; }
+.skel-name    { height: 14px; flex: 1; border-radius: 3px; }
+.skel-bar-sm  { height: 5px; width: 70px; border-radius: 3px; }
+.skel-pts     { height: 14px; width: 40px; border-radius: 3px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* ── Phase 6: Polish layer                                                   */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Micro-interactions ─────────────────────────────────────────────────
+ * hover: only fires on pointer devices — @media (hover: hover) prevents
+ *        accidental trigger on mobile (touchstart leaves hover stuck).
+ * elevation cap: 2px translateY — premium, not bouncy.
+ * transition is on the base rule so it fires on both enter AND leave.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.card {
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(255,255,255,0.13);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.38);
+  }
+}
+
+/* Chips: faint scale — makes them feel clickable without implying they are */
+.chip {
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+@media (hover: hover) {
+  .chip:hover { opacity: 0.78; transform: scale(1.05); }
+}
+
+/* Probability bar fill — swap to cubic-bezier for a snappier, more legible read */
+.prob-segment {
+  transition: flex 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* PathToFinal stage nodes: 1px lift (nodes already have box-shadow on bottleneck) */
+.ptf-node { transition: transform 0.16s ease; }
+@media (hover: hover) {
+  .ptf-node:hover { transform: translateY(-2px); }
+}
+
+/* ── 2. Keyboard focus ring ────────────────────────────────────────────────
+ * Visible focus ring for keyboard users — hidden for mouse via :focus:not(:focus-visible)
+ * ───────────────────────────────────────────────────────────────────────── */
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ── 3. Reduced-motion: honour OS preference ──────────────────────────────
+ * Blanket override — ensures every transition/animation respects the OS flag.
+ * The shimmer skeleton animation also gets suppressed here.
+ * ───────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration:       0.01ms !important;
+    animation-iteration-count: 1     !important;
+    transition-duration:      0.01ms !important;
+  }
+}
+
+/* ── 4. Visual consistency — standardised interactive button base ──────────
+ * All plain buttons (tab bar, accordion headers) get a unified focus + active state.
+ * ───────────────────────────────────────────────────────────────────────── */
+button:active { opacity: 0.82; }
+
+/* ── 5. "How It Works" trust-layer panel ──────────────────────────────────
+ * Collapsible info panel explaining the model methodology.
+ * Hidden by default; toggled by a small button in the WC page header.
+ * ───────────────────────────────────────────────────────────────────────── */
+.hiw-toggle {
+  display:       inline-flex;
+  align-items:   center;
+  gap:           5px;
+  background:    transparent;
+  border:        1px solid var(--border);
+  border-radius: 8px;
+  padding:       5px 11px;
+  font-size:     11px;
+  font-weight:   600;
+  color:         var(--text-muted);
+  cursor:        pointer;
+  font-family:   inherit;
+  letter-spacing: 0.03em;
+  transition:    color 0.15s, border-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (hover: hover) {
+  .hiw-toggle:hover { color: var(--text); border-color: rgba(255,255,255,0.22); }
+}
+
+.hiw-panel {
+  background:    var(--surface2);
+  border:        1px solid var(--border);
+  border-radius: var(--radius);
+  padding:       14px 16px 16px;
+  margin-bottom: 12px;
+}
+.hiw-grid {
+  display:               grid;
+  grid-template-columns: 1fr 1fr;
+  gap:                   12px 20px;
+  margin-top:            10px;
+}
+@media (max-width: 380px) {
+  .hiw-grid { grid-template-columns: 1fr; }
+}
+.hiw-item  { display: flex; flex-direction: column; gap: 3px; }
+.hiw-label {
+  font-size:     10px;
+  font-weight:   700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color:         var(--gold);
+}
+.hiw-desc  { font-size: 12px; color: var(--text-muted); line-height: 1.55; }

@@ -6,7 +6,9 @@ import { useFavouriteTeam } from '../hooks/useFavouriteTeam';
 import { format, parseISO } from 'date-fns';
 import { ConfidenceBadge } from '../utils/confidence.jsx';
 import ClubBadge from '../components/ClubBadge';
+import { Crest }  from '../components/ui/Crest';
 import { ComingSoon, getLeague } from '../utils/leagues.jsx';
+import { ErrorCard } from '../components/ui/ErrorCard';
 
 function formatSeason(s) {
   // "2025-26" → "25/26"
@@ -178,10 +180,7 @@ function FdMatchCard({ match }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         {/* Home */}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-          {match.homeTeam.crest && (
-            <img src={match.homeTeam.crest} alt={match.homeTeam.shortName}
-              style={{ width: 20, height: 20, objectFit: 'contain', flexShrink: 0 }} />
-          )}
+          <Crest src={match.homeTeam.crest} alt={match.homeTeam.shortName ?? match.homeTeam.name} size={20} />
           <span style={{
             fontWeight: winSide === 'home' ? 700 : 500,
             color: winSide === 'home' ? 'var(--gold)' : 'var(--text)',
@@ -211,10 +210,7 @@ function FdMatchCard({ match }) {
           }}>
             {match.awayTeam.shortName ?? match.awayTeam.name}
           </span>
-          {match.awayTeam.crest && (
-            <img src={match.awayTeam.crest} alt={match.awayTeam.shortName}
-              style={{ width: 20, height: 20, objectFit: 'contain', flexShrink: 0 }} />
-          )}
+          <Crest src={match.awayTeam.crest} alt={match.awayTeam.shortName ?? match.awayTeam.name} size={20} />
         </div>
       </div>
     </div>
@@ -223,7 +219,7 @@ function FdMatchCard({ match }) {
 
 function FdRound({ leagueId }) {
   const league = getLeague(leagueId);
-  const { data: allMatches, loading, error } = useFetch(`/api/fd/matches?league=${leagueId}`);
+  const { data: allMatches, loading, error, refresh } = useFetch(`/api/fd/matches?league=${leagueId}`);
   const [selectedMD, setSelectedMD] = useState(null);
 
   // Collect all matchdays and find the best default (latest with ≥1 result, or next scheduled)
@@ -251,7 +247,7 @@ function FdRound({ leagueId }) {
   }, [allMatches, activeMD]);
 
   if (loading) return <div className="loading-card"><div className="spinner" /><div>Loading {league.name} matches…</div></div>;
-  if (error)   return <div className="error-card">Failed to load: {error}</div>;
+  if (error)   return <ErrorCard message={error} onRetry={refresh} />;
 
   return (
     <div>
@@ -372,7 +368,7 @@ export default function Round() {
       </div>
 
       {loading && <div className="loading-card"><div className="spinner" /><div>Loading predictions…</div></div>}
-      {error   && <div className="error-card">Failed to load GW {activeGW}: {error}</div>}
+      {error   && <ErrorCard message={error} />}
 
       {!loading && predictions?.length === 0 && (
         <div className="loading-card">No predictions found for GW {activeGW}</div>

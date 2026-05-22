@@ -2,18 +2,10 @@ import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useFetch } from '../hooks/useFetch';
 import { getLeague } from '../utils/leagues.jsx';
+import { ErrorCard } from '../components/ui/ErrorCard';
+import { Crest }     from '../components/ui/Crest';
 
 // ─── Shared helpers ────────────────────────────────────────────────────────────
-
-function Crest({ src, alt, size = 20 }) {
-  if (!src) return <div style={{ width: size, height: size, flexShrink: 0 }} />;
-  return (
-    <img
-      src={src} alt={alt}
-      style={{ width: size, height: size, objectFit: 'contain', flexShrink: 0 }}
-    />
-  );
-}
 
 // Stat tile — matches PL Stats.jsx surface2 tile style
 function StatTile({ value, label, color = 'var(--gold)', span = 1 }) {
@@ -56,12 +48,12 @@ function FormDot({ result }) {
 // ─── Tab 1: Top Scorers ────────────────────────────────────────────────────────
 
 export function TopScorers({ leagueId }) {
-  const { data: scorers, loading, error } = useFetch(`/api/fd/scorers?league=${leagueId}`);
+  const { data: scorers, loading, error, refresh } = useFetch(`/api/fd/scorers?league=${leagueId}`);
 
   if (loading) return (
     <div className="loading-card"><div className="spinner" /><div>Loading scorers…</div></div>
   );
-  if (error) return <div className="error-card">Failed to load: {error}</div>;
+  if (error) return <ErrorCard message={error} onRetry={refresh} />;
   if (!scorers?.length) return <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>No scorer data available.</div>;
 
   return (
@@ -131,7 +123,7 @@ export function TopScorers({ leagueId }) {
 // ─── Tab 2: League Stats ───────────────────────────────────────────────────────
 
 export function LeagueStats({ leagueId }) {
-  const { data: allMatches, loading, error } = useFetch(`/api/fd/matches?league=${leagueId}`);
+  const { data: allMatches, loading, error, refresh } = useFetch(`/api/fd/matches?league=${leagueId}`);
 
   const stats = useMemo(() => {
     if (!allMatches) return null;
@@ -177,7 +169,7 @@ export function LeagueStats({ leagueId }) {
   if (loading) return (
     <div className="loading-card"><div className="spinner" /><div>Loading stats…</div></div>
   );
-  if (error) return <div className="error-card">Failed to load: {error}</div>;
+  if (error) return <ErrorCard message={error} onRetry={refresh} />;
   if (!stats) return <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>Not enough data yet.</div>;
 
   return (
@@ -251,7 +243,7 @@ export function LeagueStats({ leagueId }) {
 // ─── Tab 3: Form Table ─────────────────────────────────────────────────────────
 
 export function FormTable({ leagueId }) {
-  const { data: allMatches, loading, error } = useFetch(`/api/fd/matches?league=${leagueId}`);
+  const { data: allMatches, loading, error, refresh } = useFetch(`/api/fd/matches?league=${leagueId}`);
 
   const formRows = useMemo(() => {
     if (!allMatches) return [];
@@ -286,7 +278,7 @@ export function FormTable({ leagueId }) {
   if (loading) return (
     <div className="loading-card"><div className="spinner" /><div>Loading form…</div></div>
   );
-  if (error) return <div className="error-card">Failed to load: {error}</div>;
+  if (error) return <ErrorCard message={error} onRetry={refresh} />;
   if (!formRows.length) return <div className="card" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 32 }}>No form data yet.</div>;
 
   return (
