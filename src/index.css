@@ -523,6 +523,13 @@ html, body {
   .page-content { padding: 20px 24px calc(var(--nav-h) + 20px); }
 }
 
+/* ── Visibility utilities ──────────────────────────────────────────────────── */
+/* .desktop-only: hidden on narrow screens, visible on desktop (≥720px) */
+.desktop-only { display: none; }
+@media (min-width: 720px) {
+  .desktop-only { display: contents; }
+}
+
 /* ── MatchCard responsive layout (CSS Grid, no JS, no display:contents) ──── */
 /*
  * Mobile  (default): 2-row grid — score spans full top row, teams side-by-side below.

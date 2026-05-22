@@ -638,28 +638,30 @@ function PredictedTableView({ data, onTeamClick }) {
               </div>
             )}
 
-            {/* Column header — only shown when knockout reach data is present */}
+            {/* Column header — only shown when knockout reach data is present, desktop only */}
             {rows.length > 0 && tournamentReach && (
-              <div style={{
-                display:        'flex',
-                justifyContent: 'flex-end',
-                paddingBottom:  5,
-                marginBottom:   2,
-                borderBottom:   '1px solid var(--border)',
-              }}>
-                {/* Inner column centres the label over the stage names */}
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-                  <span style={{
-                    fontSize:      9,
-                    fontWeight:    700,
-                    letterSpacing: '0.06em',
-                    textTransform: 'uppercase',
-                    color:         'var(--text-muted)',
-                    opacity:       0.6,
-                  }}>
-                    Knockout path
-                  </span>
-                  <PathToFinalCompactHeader />
+              <div className="desktop-only">
+                <div style={{
+                  display:        'flex',
+                  justifyContent: 'flex-end',
+                  paddingBottom:  5,
+                  marginBottom:   2,
+                  borderBottom:   '1px solid var(--border)',
+                }}>
+                  {/* Inner column centres the label over the stage names */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                    <span style={{
+                      fontSize:      9,
+                      fontWeight:    700,
+                      letterSpacing: '0.06em',
+                      textTransform: 'uppercase',
+                      color:         'var(--text-muted)',
+                      opacity:       0.6,
+                    }}>
+                      Knockout path
+                    </span>
+                    <PathToFinalCompactHeader />
+                  </div>
                 </div>
               </div>
             )}
@@ -698,13 +700,15 @@ function PredictedTableView({ data, onTeamClick }) {
                       3rd?
                     </span>
                   ) : null}
-                  {/* PathToFinalCompact: knockout journey mini-bar */}
+                  {/* PathToFinalCompact: knockout journey mini-bar — desktop only */}
                   {tournamentReach?.[row.team] && (
-                    <PathToFinalCompact
-                      team={row.team}
-                      reach={tournamentReach[row.team]}
-                      color={rowColor}
-                    />
+                    <div className="desktop-only">
+                      <PathToFinalCompact
+                        team={row.team}
+                        reach={tournamentReach[row.team]}
+                        color={rowColor}
+                      />
+                    </div>
                   )}
                 </div>
               );

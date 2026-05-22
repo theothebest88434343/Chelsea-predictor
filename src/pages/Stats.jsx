@@ -4,8 +4,6 @@ import { format, parseISO, isValid } from 'date-fns';
 import { useSeasonAccuracy, usePerformanceMetrics, useBettingSim, useTrackerHistory } from '../hooks/useHistory';
 import { useFetch } from '../hooks/useFetch';
 import ClubBadge from '../components/ClubBadge';
-import { getLeague } from '../utils/leagues.jsx';
-import { TopScorers, LeagueStats, FormTable } from './FdStats';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ScatterChart, Scatter, ReferenceLine,
@@ -592,30 +590,13 @@ function TrackerHistory({ leagueId }) {
 
 export default function Stats() {
   const { leagueId } = useParams();
-  const isPL  = leagueId === 'premier-league';
-  const league = getLeague(leagueId);
-
-  const [tab, setTab] = useState(isPL ? 'accuracy' : 'scorers');
+  const [tab, setTab] = useState('accuracy');
 
   return (
     <div>
-      <div className="section-title">{isPL ? 'Analytics' : `${league.name} stats`}</div>
+      <div className="section-title">Analytics</div>
 
       <div className="tab-row">
-        {/* Non-PL league tabs */}
-        {!isPL && (
-          <>
-            <button className={`tab-btn${tab === 'scorers' ? ' active' : ''}`} onClick={() => setTab('scorers')}>
-              Scorers
-            </button>
-            <button className={`tab-btn${tab === 'league' ? ' active' : ''}`} onClick={() => setTab('league')}>
-              League
-            </button>
-            <button className={`tab-btn${tab === 'form' ? ' active' : ''}`} onClick={() => setTab('form')}>
-              Form
-            </button>
-          </>
-        )}
         {/* Analytics tabs — all leagues */}
         <button className={`tab-btn${tab === 'accuracy' ? ' active' : ''}`} onClick={() => setTab('accuracy')}>
           Accuracy
@@ -624,11 +605,6 @@ export default function Stats() {
           History
         </button>
       </div>
-
-      {/* Non-PL league content tabs */}
-      {!isPL && tab === 'scorers' && <TopScorers leagueId={leagueId} />}
-      {!isPL && tab === 'league'  && <LeagueStats leagueId={leagueId} />}
-      {!isPL && tab === 'form'    && <FormTable   leagueId={leagueId} />}
 
       {/* Analytics tabs — shared by all leagues */}
       {tab === 'accuracy' && (
