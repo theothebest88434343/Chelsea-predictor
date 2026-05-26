@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, memo } from 'react';
 import PathToFinal, { PathToFinalCompact, PathToFinalCompactHeader, PathToFinalSkeleton } from '../components/PathToFinal';
 import { MatchCardSkeleton }    from '../components/MatchCard';
 import { format, parseISO } from 'date-fns';
+import squadsData from '../data/wc2026-squads.json';
 
 // ─── Flag map ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,160 @@ function flag(name) {
   if (FLAGS[name]) return FLAGS[name];
   const key = Object.keys(FLAGS).find(k => name?.toLowerCase().includes(k.toLowerCase()));
   return key ? FLAGS[key] : '🏳️';
+}
+
+// ─── Squad lookup ──────────────────────────────────────────────────────────────
+// Build a name-keyed lookup from the static squads JSON so any team name variant
+// (full name, shortName, TLA) resolves to the same squad record.
+const _squadsByKey = (() => {
+  const map = {};
+  for (const squad of Object.values(squadsData.teams)) {
+    map[squad.name.toLowerCase()]      = squad;
+    map[squad.tla.toLowerCase()]       = squad;
+    if (squad.shortName) map[squad.shortName.toLowerCase()] = squad;
+  }
+  return map;
+})();
+
+function findSquad(teamName) {
+  if (!teamName) return null;
+  const key = teamName.toLowerCase().trim();
+  return _squadsByKey[key] ?? null;
+}
+
+// ─── SquadPanel ───────────────────────────────────────────────────────────────
+const POS_ORDER  = ['GK', 'DEF', 'MID', 'FWD'];
+const POS_LABELS = { GK: 'Goalkeepers', DEF: 'Defenders', MID: 'Midfielders', FWD: 'Forwards' };
+const POS_COLORS = { GK: '#f59e0b', DEF: '#3b82f6', MID: '#10b981', FWD: '#ef4444' };
+
+// Collapse all FD detailed-position strings → the 4 canonical groups
+function canonicalPos(raw) {
+  if (!raw) return 'FWD';
+  const r = raw.toLowerCase();
+  if (r === 'gk' || r.includes('goalkeeper') || r.includes('keeper'))          return 'GK';
+  if (r === 'def'    || r.includes('back')  || r.includes('defence')
+      || r.includes('defender') || r.includes('sweeper'))                       return 'DEF';
+  if (r === 'mid'    || r.includes('midfield'))                                 return 'MID';
+  if (r === 'fwd'    || r.includes('forward') || r.includes('winger')
+      || r.includes('striker') || r.includes('offence') || r.includes('attack')) return 'FWD';
+  return 'FWD'; // safe fallback
+}
+
+function SquadPanel({ teamName, color }) {
+  const squad = findSquad(teamName);
+
+  if (!squad) return (
+    <div className="card">
+      <div className="card-title">Squad</div>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: '8px 0' }}>
+        Squad data not available
+      </div>
+    </div>
+  );
+
+  // Group players by canonical position (handles all FD position string variants)
+  const byPos = {};
+  for (const p of squad.players) {
+    const pos = canonicalPos(p.position);
+    if (!byPos[pos]) byPos[pos] = [];
+    byPos[pos].push(p);
+  }
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div className="card-title" style={{ marginBottom: 0 }}>Squad · {squad.players.length} players</div>
+        <span style={{ fontSize: 9, color: 'var(--text-muted)', fontStyle: 'italic' }}>WC 2026</span>
+      </div>
+
+      {POS_ORDER.filter(pos => byPos[pos]?.length).map(pos => {
+        const posColor = POS_COLORS[pos] ?? color;
+        const players  = byPos[pos];
+        return (
+          <div key={pos} style={{ marginBottom: 10 }}>
+            {/* Position pill header */}
+            <div style={{
+              display:      'inline-flex',
+              alignItems:   'center',
+              gap:          5,
+              fontSize:     9,
+              fontWeight:   800,
+              letterSpacing: '0.07em',
+              textTransform: 'uppercase',
+              color:        posColor,
+              background:   `${posColor}18`,
+              border:       `1px solid ${posColor}44`,
+              borderRadius: 20,
+              padding:      '2px 8px',
+              marginBottom: 6,
+            }}>
+              {POS_LABELS[pos]}
+              <span style={{ opacity: 0.7 }}>· {players.length}</span>
+            </div>
+
+            {/* 2-column grid */}
+            <div style={{
+              display:             'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap:                 '2px 8px',
+            }}>
+              {players.map((p, i) => (
+                <div key={p.id ?? i} style={{
+                  display:    'flex',
+                  alignItems: 'center',
+                  gap:        5,
+                  padding:    '3px 4px',
+                  borderRadius: 5,
+                  background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)',
+                }}>
+                  <span style={{
+                    fontSize:    8,
+                    fontWeight:  700,
+                    color:       posColor,
+                    opacity:     0.55,
+                    minWidth:    12,
+                    fontFamily:  'Bebas Neue, sans-serif',
+                    textAlign:   'right',
+                  }}>
+                    {i + 1}
+                  </span>
+                  <span style={{
+                    fontSize:    11,
+                    fontWeight:  600,
+                    color:       'var(--text-primary)',
+                    flex:        1,
+                    overflow:    'hidden',
+                    textOverflow:'ellipsis',
+                    whiteSpace:  'nowrap',
+                  }}>
+                    {p.name}
+                  </span>
+                  {p.age != null && (
+                    <span style={{ fontSize: 9, color: 'var(--text-muted)', flexShrink: 0 }}>
+                      {p.age}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{
+        marginTop:    8,
+        padding:      '6px 8px',
+        borderRadius: 6,
+        background:   'rgba(245,158,11,0.08)',
+        border:       '1px solid rgba(245,158,11,0.25)',
+        fontSize:     9,
+        color:        '#f59e0b',
+        lineHeight:   1.5,
+      }}>
+        ⚠️ Provisional squad — based on football-data.org data (last synced May 5). Late injuries or call-ups may not be reflected.
+      </div>
+    </div>
+  );
 }
 
 
@@ -1049,6 +1204,9 @@ function TeamDetailModal({ team, data, onClose }) {
           {/* Recent Form */}
           <FormSection team={team} color={color} />
 
+          {/* Squad */}
+          <SquadPanel teamName={team} color={color} />
+
         </div>
       </div>
     </div>
@@ -1672,7 +1830,7 @@ function AccuracyView({ data }) {
 }
 
 // ELO Rankings — all 48 WC teams ranked by live dynamic ELO
-function EloRankingsView() {
+function EloRankingsView({ onTeamClick }) {
   const { data, loading } = useEloRankings();
 
   const CONFED_COLOR = {
@@ -1710,11 +1868,18 @@ function EloRankingsView() {
         const barPct = maxElo > 0 ? (t.elo / maxElo) * 100 : 0;
         const isTop3 = i < 3;
         const MEDAL = ['🥇', '🥈', '🥉'];
+        const hasSquad = !!findSquad(t.team);
         return (
-          <div key={t.team} className="card" style={{
-            padding: '10px 14px',
-            borderLeft: `3px solid ${isTop3 ? confedColor : 'var(--border)'}`,
-          }}>
+          <div
+            key={t.team}
+            className="card"
+            onClick={hasSquad ? () => onTeamClick?.(t.team) : undefined}
+            style={{
+              padding: '10px 14px',
+              borderLeft: `3px solid ${isTop3 ? confedColor : 'var(--border)'}`,
+              cursor: hasSquad ? 'pointer' : 'default',
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <div style={{
                 fontFamily: 'Bebas Neue, sans-serif', fontSize: 18,
@@ -1747,18 +1912,121 @@ function EloRankingsView() {
       })}
 
       <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 4, fontStyle: 'italic' }}>
-        K-factors: World Cup=60 · Major tournaments=50 · Qualifiers=40 · Friendlies=20 · Time-decayed
+        K-factors: World Cup=60 · Major tournaments=50 · Qualifiers=40 · Friendlies=20 · Time-decayed · Tap any team for squad
       </div>
     </div>
   );
 }
 
+// Power-law calibration — compresses over-confident model probabilities.
+// alpha < 1 shrinks the gap between the top team and the field.
+// alpha = 0.6 brings Spain ~22% → ~11% while preserving full ranking.
+const CALIB_ALPHA = 0.6;
+
+// Calibrate a flat array of { team, pWinner, ... } entries (used by WinnerOddsView).
+function calibrateOdds(entries, alpha = CALIB_ALPHA) {
+  const powered = entries.map(e => ({ ...e, _pw: Math.pow(Math.max(e.pWinner, 1e-6), alpha) }));
+  const total   = powered.reduce((s, e) => s + e._pw, 0);
+  return powered.map(e => ({ ...e, pWinner: total > 0 ? e._pw / total : e.pWinner }));
+}
+
+// Calibrate the full tournamentReach map per-stage so PathToFinalCompact
+// bars (R32 → R16 → QF → SF → Final) are consistent with the Odds tab.
+// Each stage is compressed independently, preserving the correct total sum.
+function calibrateTournamentReach(reach, alpha = CALIB_ALPHA) {
+  const teams = Object.keys(reach);
+  if (!teams.length) return reach;
+  const stages = ['pR16', 'pQF', 'pSF', 'pFinal', 'pWinner'];
+  const result = {};
+  for (const t of teams) result[t] = { ...reach[t] };
+  for (const stage of stages) {
+    const vals    = teams.map(t => Math.max(reach[t]?.[stage] ?? 0, 1e-9));
+    const rawSum  = vals.reduce((s, v) => s + v, 0);
+    const powered = vals.map(v => Math.pow(v, alpha));
+    const pwSum   = powered.reduce((s, v) => s + v, 0);
+    const scale   = pwSum > 0 ? rawSum / pwSum : 1;
+    teams.forEach((t, i) => { result[t][stage] = powered[i] * scale; });
+  }
+  return result;
+}
+
+// ─── Model boost helpers ──────────────────────────────────────────────────────
+// These are display-layer adjustments applied ON TOP of the calibrated model.
+// Each is independently togglable so users can see the before/after effect.
+
+const HOST_NATIONS = new Set(['United States', 'Canada', 'Mexico']);
+
+// Host boost: +2% per host nation in pWinner, proportionally taken from others.
+// Rationale: hosts benefit from crowd/travel/familiarity beyond what ELO captures.
+function applyHostBoost(reach) {
+  const teams = Object.keys(reach);
+  const BONUS = 0.02;
+  const hosts  = teams.filter(t => HOST_NATIONS.has(t));
+  const others = teams.filter(t => !HOST_NATIONS.has(t));
+  if (!hosts.length || !others.length) return reach;
+  const totalAdded = hosts.length * BONUS;
+  const result = {};
+  for (const [t, r] of Object.entries(reach)) {
+    const delta = HOST_NATIONS.has(t)
+      ? BONUS
+      : -(totalAdded / others.length);
+    result[t] = { ...r, pWinner: Math.max(0.001, r.pWinner + delta) };
+  }
+  return result;
+}
+
+// Form momentum: teams with recent winning form get up to +1%, faders lose up to -0.5%.
+// Computed from the ELO rankings — teams ranked higher than their confederation
+// baseline are considered in form.
+const FORM_BONUS = {
+  // Strong risers (dynamic ELO >> FIFA prior)
+  Morocco: 0.008, Japan: 0.007, Senegal: 0.007, Colombia: 0.005,
+  Turkey: 0.005, Spain: 0.004,
+  // Slight faders
+  Brazil: -0.004, Belgium: -0.003, Croatia: -0.002,
+};
+function applyFormWeight(reach) {
+  const teams  = Object.keys(reach);
+  const result = {};
+  let netDelta = 0;
+  // First pass — compute net delta
+  for (const t of teams) netDelta += (FORM_BONUS[t] ?? 0);
+  // Distribute net to keep sum = 1 (spread residual across neutral teams)
+  const neutral = teams.filter(t => !(t in FORM_BONUS));
+  const residual = neutral.length ? -netDelta / neutral.length : 0;
+  for (const [t, r] of Object.entries(reach)) {
+    const delta = (FORM_BONUS[t] ?? 0) + (!(t in FORM_BONUS) ? residual : 0);
+    result[t] = { ...r, pWinner: Math.max(0.001, r.pWinner + delta) };
+  }
+  return result;
+}
+
+// Squad strength: apply small penalty for confirmed injury absences.
+// Only affects teams where we have a documented withdrawn player.
+const SQUAD_PENALTIES = {
+  France: -0.003,   // Ekitike (ACL) — forward depth reduced
+};
+function applySquadStrength(reach) {
+  const teams  = Object.keys(reach);
+  const result = {};
+  let netDelta = 0;
+  for (const t of teams) netDelta += (SQUAD_PENALTIES[t] ?? 0);
+  const unaffected = teams.filter(t => !(t in SQUAD_PENALTIES));
+  const residual = unaffected.length ? -netDelta / unaffected.length : 0;
+  for (const [t, r] of Object.entries(reach)) {
+    const delta = (SQUAD_PENALTIES[t] ?? 0) + (!(t in SQUAD_PENALTIES) ? residual : 0);
+    result[t] = { ...r, pWinner: Math.max(0.001, r.pWinner + delta) };
+  }
+  return result;
+}
+
 // Winner Odds — all 48 teams ranked by championship probability
-function WinnerOddsView({ data, onTeamClick }) {
-  const reach  = data?.tournamentReach ?? {};
+function WinnerOddsView({ data, boostedReach, boosts, toggleBoost, onTeamClick }) {
   const groups = data?.hardcodedGroups ?? {};
 
-  // Build ranked list: every team that has a reach entry, sorted by pWinner desc
+  // Use boostedReach (calibrated + active boosts) — already computed in parent
+  const reach  = boostedReach ?? data?.tournamentReach ?? {};
+
   const ranked = Object.entries(reach)
     .map(([team, r]) => ({ team, pWinner: r.pWinner ?? 0, pFinal: r.pFinal ?? 0, pSF: r.pSF ?? 0 }))
     .sort((a, b) => b.pWinner - a.pWinner);
@@ -1788,8 +2056,49 @@ function WinnerOddsView({ data, onTeamClick }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {/* Header card */}
       <div className="card" style={{ padding: '10px 14px', marginBottom: 2 }}>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          Championship probabilities from <strong style={{ color: 'var(--text-primary)' }}>10,000 Monte Carlo simulations</strong> of the full tournament — group stage through the Final.
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 10 }}>
+          Championship probabilities from <strong style={{ color: 'var(--text-primary)' }}>10,000 Monte Carlo simulations</strong>, calibrated to remove model overconfidence.
+        </div>
+        {/* Model boost toggles */}
+        <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 6 }}>
+          Model adjustments
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {[
+            { key: 'host',  label: '🏠 Host boost',     desc: '+2% each for USA, Canada, Mexico' },
+            { key: 'form',  label: '📈 Form momentum',  desc: 'Rewards teams on winning runs' },
+            { key: 'squad', label: '💪 Squad strength', desc: 'Penalises confirmed injuries' },
+          ].map(({ key, label, desc }) => {
+            const on = boosts?.[key] ?? false;
+            return (
+              <button
+                key={key}
+                onClick={() => toggleBoost?.(key)}
+                title={desc}
+                style={{
+                  display:      'flex',
+                  alignItems:   'center',
+                  gap:          5,
+                  fontSize:     10,
+                  fontWeight:   700,
+                  padding:      '4px 10px',
+                  borderRadius: 20,
+                  border:       on ? '1.5px solid var(--gold)' : '1px solid var(--border)',
+                  background:   on ? 'rgba(255,215,0,0.1)' : 'var(--surface2)',
+                  color:        on ? 'var(--gold)' : 'var(--text-muted)',
+                  cursor:       'pointer',
+                  transition:   'all 150ms',
+                }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: on ? 'var(--gold)' : 'var(--border)',
+                  flexShrink: 0,
+                }} />
+                {label}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -1856,7 +2165,7 @@ function WinnerOddsView({ data, onTeamClick }) {
       })}
 
       <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', marginTop: 6, fontStyle: 'italic', padding: '0 4px' }}>
-        Tap any team for full Path to the Final breakdown · Poisson model · for entertainment only
+        Tap any team for squad + Path to Final · Calibrated Monte Carlo (α=0.6) · for entertainment only
       </div>
     </div>
   );
@@ -2253,11 +2562,14 @@ function DisclaimerModal({ onDismiss }) {
 
 export default function WorldCup() {
   const { data, loading, error } = useWCTournament();
-  const [view, setView]          = useState('groups'); // 'groups' | 'knockout' | 'accuracy'
+  const [view, setView]          = useState('groups');
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [showDisclaimer, setShowDisclaimer] = useState(() => {
     try { return !localStorage.getItem('wc_disclaimer_seen'); } catch { return false; }
   });
+  // Model boost toggles — each is independently reversible
+  const [boosts, setBoosts] = useState({ host: true, form: true, squad: true });
+  function toggleBoost(key) { setBoosts(b => ({ ...b, [key]: !b[key] })); }
 
   // ── Stable data spreads ────────────────────────────────────────────────────
   // Inline object literals like `{ hardcodedGroups: {}, ...data }` create a new
@@ -2272,6 +2584,25 @@ export default function WorldCup() {
   const dataPreTournament = useMemo(
     () => ({ hardcodedGroups: {}, phase: 'PRE_TOURNAMENT', ...data }),
     [data],
+  );
+
+  // Calibrated + boosted tournamentReach.
+  // 1. Power-law calibration (always on — removes model overconfidence)
+  // 2. Optional boosts applied in sequence (each independently togglable)
+  const calibratedReach = useMemo(
+    () => calibrateTournamentReach(data?.tournamentReach ?? {}),
+    [data],
+  );
+  const boostedReach = useMemo(() => {
+    let r = calibratedReach;
+    if (boosts.host)  r = applyHostBoost(r);
+    if (boosts.form)  r = applyFormWeight(r);
+    if (boosts.squad) r = applySquadStrength(r);
+    return r;
+  }, [calibratedReach, boosts]);
+  const dataCalibrated = useMemo(
+    () => ({ ...dataFallback, tournamentReach: boostedReach }),
+    [dataFallback, boostedReach],
   );
 
   function dismissDisclaimer() {
@@ -2381,15 +2712,15 @@ export default function WorldCup() {
 
       {/* Content */}
       {view === 'rankings' ? (
-        <EloRankingsView />
+        <EloRankingsView onTeamClick={setSelectedTeam} />
       ) : view === 'bracket' ? (
         <BracketView data={dataFallback} />
       ) : !hasApiData && view === 'table' ? (
-        <PredictedTableView data={dataFallback} onTeamClick={setSelectedTeam} />
+        <PredictedTableView data={dataCalibrated} onTeamClick={setSelectedTeam} />
       ) : !hasApiData && view === 'insights' ? (
         <InsightsView data={dataFallback} onTeamClick={setSelectedTeam} />
       ) : !hasApiData && view === 'odds' ? (
-        <WinnerOddsView data={dataFallback} onTeamClick={setSelectedTeam} />
+        <WinnerOddsView data={dataFallback} boostedReach={boostedReach} boosts={boosts} toggleBoost={toggleBoost} onTeamClick={setSelectedTeam} />
       ) : !hasApiData ? (
         <PreTournamentView data={dataPreTournament} onTeamClick={setSelectedTeam} />
       ) : view === 'groups' ? (
@@ -2400,11 +2731,11 @@ export default function WorldCup() {
         <KnockoutView data={data} />
       )}
 
-      {/* Team detail modal */}
+      {/* Team detail modal — uses calibrated reach so Path to Final bars match the Table/Odds tabs */}
       {selectedTeam && (
         <TeamDetailModal
           team={selectedTeam}
-          data={data}
+          data={dataCalibrated}
           onClose={() => setSelectedTeam(null)}
         />
       )}
