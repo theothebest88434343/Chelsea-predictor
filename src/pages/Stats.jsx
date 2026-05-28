@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { format, parseISO, isValid } from 'date-fns';
-import { useSeasonAccuracy, usePerformanceMetrics, useBettingSim, useTrackerHistory } from '../hooks/useHistory';
+import { useSeasonAccuracy, useBettingSim, useTrackerHistory } from '../hooks/useHistory';
 import { useFetch } from '../hooks/useFetch';
 import ClubBadge from '../components/ClubBadge';
 import {
@@ -9,107 +9,184 @@ import {
   BarChart, Bar, ScatterChart, Scatter, ReferenceLine,
 } from 'recharts';
 
-function AccuracyCard({ leagueId }) {
-  const { data, loading } = useSeasonAccuracy(leagueId);
-  if (loading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
-  if (!data || data.total === 0) return (
-    <div className="card">
-      <div className="card-title">Season accuracy</div>
-      <div className="text-muted fs-13">No tracked predictions yet. Predictions are auto-tracked before each game.</div>
-    </div>
-  );
-
-  const { total, correct, accuracy, logLoss, brier, byGW } = data;
-
+// ─── Stat row — secondary / supporting metric ──────────────────────────────────
+function StatRow({ label, sublabel, value, subvalue }) {
   return (
-    <div className="card">
-      <div className="card-title">Season accuracy</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
-        <div style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 8px', textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif', color: 'var(--gold)' }}>
-            {(accuracy * 100).toFixed(1)}%
-          </div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>ACCURACY</div>
-        </div>
-        <div style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 8px', textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif', color: 'var(--text)' }}>
-            {correct}/{total}
-          </div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>CORRECT</div>
-        </div>
-        <div style={{ background: 'var(--surface2)', borderRadius: 8, padding: '10px 8px', textAlign: 'center' }}>
-          <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif', color: 'var(--blue-light)' }}>
-            {brier != null ? brier.toFixed(3) : '—'}
-          </div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>BRIER</div>
-        </div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{label}</div>
+        {sublabel && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{sublabel}</div>}
       </div>
-
-      {byGW?.length > 0 && (
-        <>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>
-            {leagueId === 'premier-league' ? 'Accuracy by gameweek' : 'Accuracy by matchday'}
-          </div>
-          <ResponsiveContainer width="100%" height={120}>
-            <BarChart data={byGW} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis
-                dataKey="gw"
-                tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-                label={{
-                  value: leagueId === 'premier-league' ? 'GW' : 'MD',
-                  position: 'insideBottomRight',
-                  offset: -4,
-                  fontSize: 9,
-                  fill: 'var(--text-muted)',
-                }}
-              />
-              <YAxis domain={[0,1]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={v => `${(v*100).toFixed(0)}%`} />
-              <Tooltip formatter={v => `${(v*100).toFixed(0)}%`} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 12 }} />
-              <Bar dataKey="accuracy" fill="var(--blue)" radius={[3,3,0,0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </>
-      )}
-
-      {logLoss != null && (
-        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-muted)' }}>
-          Log loss: <strong style={{ color: 'var(--text)' }}>{logLoss.toFixed(4)}</strong>
-          <span style={{ marginLeft: 12 }}>
-            Lower is better (random baseline ≈ 1.099)
-          </span>
+      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif', color: 'var(--text)' }}>
+          {value}
         </div>
-      )}
+        {subvalue && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{subvalue}</div>}
+      </div>
     </div>
   );
 }
 
-function CalibrationCard({ leagueId }) {
-  const { data } = usePerformanceMetrics(leagueId);
-  if (!data?.calibration?.length) return null;
+// ─── Accuracy card — unified season performance view ───────────────────────────
+// Reads from the v2 /api/season-accuracy contract.
+// predictionAccuracy (score_based)  = primary user-facing metric
+// modelAccuracy (probability_argmax) = secondary model health metric
+// calibration (probability_based)    = advanced / collapsed by default
+function AccuracyCard({ leagueId }) {
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const { data, loading } = useSeasonAccuracy(leagueId);
 
-  const calibData = data.calibration.map(b => ({
-    predicted: (b.meanPredicted * 100).toFixed(0),
+  if (loading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
+  if (!data || data.meta?.total === 0) return (
+    <div className="card">
+      <div className="card-title">Season performance</div>
+      <div className="text-muted fs-13">No tracked predictions yet. Predictions are saved automatically before each game.</div>
+    </div>
+  );
+
+  const { meta, predictionAccuracy, modelAccuracy, calibration, byGameweek } = data;
+  const total   = meta?.total ?? 0;
+  const gwLabel = leagueId === 'premier-league' ? 'GW' : 'MD';
+
+  // Plain-English confidence quality label from Brier score.
+  // Brier = 0 (perfect) … 0.67 (random baseline for 3-outcome events).
+  const brierLabel = calibration?.brier == null ? null
+    : calibration.brier < 0.52 ? 'Well calibrated'
+    : calibration.brier < 0.60 ? 'Reasonably calibrated'
+    : 'Needs improvement';
+
+  const chartData = (byGameweek ?? []).map(d => ({
+    gw:    d.gameweek,
+    rate:  d.predictionAccuracy.rate,
+    model: d.modelAccuracy.rate,
+  }));
+
+  // Calibration curve data — already in the v2 response, no extra fetch needed.
+  const calibCurve = (calibration?.curve ?? []).map(b => ({
+    predicted: +(b.meanPredicted * 100).toFixed(0),
     actual:    b.meanActual,
     n:         b.count,
   }));
 
   return (
     <div className="card">
-      <div className="card-title">Calibration curve</div>
-      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
-        Perfect calibration = diagonal line. Points above = overconfident; below = underconfident.
+      <div className="card-title">Season performance</div>
+
+      {/* ── PRIMARY: hero prediction accuracy ─────────────────────────────────── */}
+      <div style={{ textAlign: 'center', padding: '4px 0 20px' }}>
+        <div style={{
+          fontSize: 64, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif',
+          color: 'var(--gold)', lineHeight: 1,
+        }}>
+          {(predictionAccuracy.rate * 100).toFixed(1)}%
+        </div>
+        <div style={{ fontSize: 14, color: 'var(--text)', marginTop: 6, fontWeight: 500 }}>
+          Correct outcome predicted
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+          {predictionAccuracy.correct} of {total} games
+          {predictionAccuracy.exact > 0 && ` · ${predictionAccuracy.exact} exact scores`}
+        </div>
       </div>
-      <ResponsiveContainer width="100%" height={180}>
-        <ScatterChart margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-          <XAxis dataKey="predicted" type="number" domain={[0,100]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} label={{ value: 'Predicted %', position: 'insideBottom', dy: 14, fontSize: 10, fill: 'var(--text-muted)' }} />
-          <YAxis dataKey="actual" type="number" domain={[0,1]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={v => `${(v*100).toFixed(0)}%`} />
-          <Tooltip formatter={(v) => typeof v === 'number' ? (v < 2 ? `${(v*100).toFixed(1)}%` : `${v}%`) : v} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 12 }} />
-          <ReferenceLine segment={[{x:0,y:0},{x:100,y:1}]} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 4" />
-          <Scatter data={calibData} fill="var(--gold)" />
-        </ScatterChart>
-      </ResponsiveContainer>
+
+      {/* ── DIVIDER ────────────────────────────────────────────────────────────── */}
+      <div style={{ borderTop: '1px solid var(--border)', margin: '0 0 16px' }} />
+
+      {/* ── SECONDARY: model + confidence ─────────────────────────────────────── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 20 }}>
+        <StatRow
+          label="Probability model"
+          sublabel="Most likely winner based on match odds and form"
+          value={`${(modelAccuracy.rate * 100).toFixed(1)}%`}
+          subvalue={`${modelAccuracy.correct} / ${total}`}
+        />
+        {brierLabel && (
+          <StatRow
+            label="Confidence quality"
+            sublabel={`${brierLabel} · 0 = perfect, lower is better`}
+            value={calibration.brier.toFixed(3)}
+          />
+        )}
+      </div>
+
+      {/* ── COLLAPSIBLE: breakdown by gameweek + calibration chart ────────────── */}
+      <button
+        onClick={() => setShowBreakdown(v => !v)}
+        style={{
+          width: '100%', padding: '8px 12px', borderRadius: 8,
+          border: '1px solid var(--border)', background: 'var(--surface2)',
+          color: 'var(--text-muted)', fontSize: 12, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}
+      >
+        <span>{showBreakdown ? 'Hide breakdown' : 'Show breakdown by ' + (leagueId === 'premier-league' ? 'gameweek' : 'matchday')}</span>
+        <span style={{ fontSize: 10, opacity: 0.6 }}>{showBreakdown ? '▲' : '▼'}</span>
+      </button>
+
+      {showBreakdown && chartData.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+
+          {/* Per-GW bars */}
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 600 }}>
+            Accuracy by {leagueId === 'premier-league' ? 'gameweek' : 'matchday'}
+          </div>
+          <ResponsiveContainer width="100%" height={120}>
+            <BarChart data={chartData} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis
+                dataKey="gw"
+                tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                label={{ value: gwLabel, position: 'insideBottomRight', offset: -4, fontSize: 9, fill: 'var(--text-muted)' }}
+              />
+              <YAxis domain={[0,1]} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={v => `${(v*100).toFixed(0)}%`} />
+              <Tooltip
+                formatter={(v, name) => [`${(v * 100).toFixed(0)}%`, name === 'rate' ? 'Prediction' : 'Model']}
+                contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 12 }}
+              />
+              <Bar dataKey="rate"  fill="var(--blue)"              radius={[3,3,0,0]} name="Prediction" />
+              <Bar dataKey="model" fill="rgba(255,255,255,0.10)"   radius={[3,3,0,0]} name="Model" />
+            </BarChart>
+          </ResponsiveContainer>
+
+          {/* Calibration scatter — only if enough data points */}
+          {calibCurve.length >= 3 && (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 20, marginBottom: 4, fontWeight: 600 }}>
+                Confidence calibration
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
+                When we say 60% chance — does it happen 60% of the time? Points on the line = perfect.
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <ScatterChart margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="predicted" type="number" domain={[0,100]}
+                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                    label={{ value: 'We said…', position: 'insideBottom', dy: 14, fontSize: 10, fill: 'var(--text-muted)' }} />
+                  <YAxis dataKey="actual" type="number" domain={[0,1]}
+                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                    tickFormatter={v => `${(v*100).toFixed(0)}%`} />
+                  <Tooltip
+                    formatter={(v) => typeof v === 'number' ? (v < 2 ? `${(v*100).toFixed(1)}%` : `${v}%`) : v}
+                    contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 12 }}
+                  />
+                  <ReferenceLine segment={[{x:0,y:0},{x:100,y:1}]} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 4" />
+                  <Scatter data={calibCurve} fill="var(--gold)" />
+                </ScatterChart>
+              </ResponsiveContainer>
+            </>
+          )}
+
+          {/* Log loss footnote */}
+          {calibration?.logLoss != null && (
+            <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-muted)' }}>
+              Log loss <strong style={{ color: 'var(--text)' }}>{calibration.logLoss.toFixed(4)}</strong>
+              <span style={{ marginLeft: 8 }}>· random baseline ≈ 1.099 · lower is better</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -186,20 +263,6 @@ function outcomeFromScore(scoreStr) {
   return h > a ? 'H' : h < a ? 'A' : 'D';
 }
 
-function getPredictedOutcome(prediction) {
-  if (!prediction) return null;
-  // Prefer probability-based outcome — bestScore is the matrix argmax which is
-  // often 1-1 even when the model strongly favours a home/away win. Using
-  // probabilities avoids misclassifying all predictions as draws.
-  const { homeWin, draw, awayWin } = prediction;
-  if (homeWin != null && draw != null && awayWin != null) {
-    const max = Math.max(homeWin, draw, awayWin);
-    if (homeWin === max) return 'H';
-    if (awayWin === max) return 'A';
-    return 'D';
-  }
-  return outcomeFromScore(prediction.predictedScore ?? '');
-}
 
 function classifyPrediction(p) {
   if (!p.result) return 'pending';
@@ -210,12 +273,17 @@ function classifyPrediction(p) {
 
   if (!predScore) return 'pending';
 
-  if (predScore.replace('–', '-') === `${homeGoals}-${awayGoals}`) return 'exact';
+  const normalised = predScore.replace(/–/g, '-');
 
-  const predicted = getPredictedOutcome(p.prediction);
-  if (predicted === null) return 'wrong';
+  // ★ Exact: displayed predicted score matches actual score exactly
+  if (normalised === `${homeGoals}-${awayGoals}`) return 'exact';
 
-  return predicted === actual ? 'correct' : 'wrong';
+  // ✓/✗: use outcome implied by the DISPLAYED predicted score, not model probabilities.
+  // e.g. "Predicted 1-1, actual 2-0" → score says D, actual is H → Wrong
+  //      "Predicted 2-1, actual 1-0" → score says H, actual is H → Correct
+  const predictedOutcome = outcomeFromScore(normalised);
+  if (predictedOutcome === null) return 'wrong';
+  return predictedOutcome === actual ? 'correct' : 'wrong';
 }
 
 const STATUS_META = {
@@ -378,30 +446,45 @@ function useFdMatchdayPredictions(leagueId, matchday, enabled) {
 function TrackerHistory({ leagueId }) {
   const { data, loading } = useTrackerHistory(leagueId);
   const [selectedGW, setSelectedGW] = useState(null);
-  const isPL = leagueId === 'premier-league';
+  const isPL    = leagueId === 'premier-league';
   const gwLabel = isPL ? 'Gameweek' : 'Matchday';
 
-  // Derive the actual current GW/matchday from the highest number in stored predictions
-  // (data.currentGW from server can lag behind the actual week).
-  const serverGW = data?.currentGW ?? null;
-  const liveGW = data
-    ? (Math.max(serverGW ?? 0, ...(data.predictions ?? []).map(p => p.gameweek ?? 0)) || null)
-    : null;
-
-  // PL: single bulk endpoint for the whole gameweek
-  const { data: livePredData, loading: liveLoadingPL } = useFetch(
-    isPL && liveGW ? `/api/predict-gameweek?gw=${liveGW}` : null
+  // Server is the sole authority on which rounds are complete.
+  // completedRounds is ordered by completed_at DESC (real completion order — safe
+  // for Brazil where matchday N can complete before matchday N-1).
+  // completedGWs is the legacy numeric alias kept for backward compat.
+  const serverGW       = data?.currentGW ?? null;
+  const completedRounds = data?.completedRounds ?? [];
+  const completedSet   = new Set(data?.completedGWs ?? []);
+  // roundCompletionOrder: maps GW number → completion rank (0 = most recent)
+  // Used to sort the History dropdown by real completion time, not by GW number.
+  const roundCompletionRank = new Map(
+    completedRounds.map((r, i) => [Number(r.external_round_id), i])
   );
 
-  // FD leagues: parallel per-fixture fetch for current matchday
-  // (enabled only when we know there are no settled results — determined below)
-  // We always call the hook but pass enabled=false until we know we need it.
-  // We'll override with the real value after processing; use a ref-like approach
-  // by always calling with the computed matchday and gating on showLiveFallback.
+  // liveGW: the GW the live-predictions fallback should target.
+  // PL: take max(serverGW, all stored GWs) — FPL is_current can lag.
+  // FD: use serverGW directly — preFill stores future MDs that would inflate max.
+  const liveGW = data
+    ? (isPL
+        ? (Math.max(serverGW ?? 0, ...(data.predictions ?? []).map(p => p.gameweek ?? 0)) || null)
+        : serverGW)
+    : null;
+
+  // showLiveFallback: current GW is not yet in the server's completedGWs list.
+  // The server is the single source of truth — no re-derivation on the client.
+  const showLiveFallback = liveGW !== null && !completedSet.has(liveGW);
+
+  // PL live-fallback data (bulk endpoint, only fetched when needed)
+  const { data: livePredData, loading: liveLoadingPL } = useFetch(
+    isPL && showLiveFallback && liveGW ? `/api/predict-gameweek?gw=${liveGW}` : null
+  );
+
+  // FD live-fallback data (per-fixture fetch, only fetched when needed)
   const { data: fdLiveData, loading: liveLoadingFD } = useFdMatchdayPredictions(
-    !isPL ? leagueId : null,
+    !isPL && showLiveFallback ? leagueId : null,
     liveGW,
-    !isPL && !!liveGW  // always attempt for FD; we'll display only if needed
+    !isPL && showLiveFallback && !!liveGW
   );
 
   const liveLoading = isPL ? liveLoadingPL : liveLoadingFD;
@@ -410,49 +493,50 @@ function TrackerHistory({ leagueId }) {
 
   const all = data?.predictions ?? [];
 
-  // Build GW map from stored history
-  const byGW = [];
+  // Build GW map — only include GWs the server says are complete.
+  // Dedup by fixtureId within each GW: keep the entry with a result; if multiple
+  // settled entries exist, keep the one with the latest trackedAt.
+  const byGW  = [];
   const gwMap = new Map();
+
   for (const p of all) {
     const gw = p.gameweek ?? 0;
-    if (!gw || (isPL && gw === 1)) continue;
-    if (!gwMap.has(gw)) { gwMap.set(gw, []); byGW.push(gw); }
-    gwMap.get(gw).push(p);
-  }
-  byGW.sort((a, b) => b - a);
-  const maxGW = byGW[0] ?? serverGW ?? 0;
-
-  // Deduplicate current GW: keep only the most-recently-tracked batch (within 2h)
-  // to handle predictions saved twice from different data sources.
-  const currentRows = gwMap.get(maxGW) ?? [];
-  if (currentRows.length > 0) {
-    const maxTracked = Math.max(...currentRows.map(p => safeDate(p.trackedAt)?.getTime() ?? 0));
-    if (maxTracked > 0) {
-      const twoHours = 2 * 60 * 60 * 1000;
-      gwMap.set(maxGW, currentRows.filter(p => {
-        const t = safeDate(p.trackedAt)?.getTime();
-        return !t || t >= maxTracked - twoHours;
-      }));
+    // Exclude: no GW, PL GW1 (warm-up round), and any GW the server hasn't marked complete.
+    if (!gw || (isPL && gw === 1) || !completedSet.has(gw)) continue;
+    if (!gwMap.has(gw)) { gwMap.set(gw, new Map()); byGW.push(gw); }
+    const gwFixtures = gwMap.get(gw);
+    const existing   = gwFixtures.get(p.fixtureId);
+    // Prefer settled over unsettled; among settled, prefer newest trackedAt.
+    if (!existing) {
+      gwFixtures.set(p.fixtureId, p);
+    } else if (p.result && !existing.result) {
+      gwFixtures.set(p.fixtureId, p); // settled wins over unsettled
+    } else if (p.result && existing.result) {
+      const tNew = safeDate(p.trackedAt)?.getTime() ?? 0;
+      const tOld = safeDate(existing.trackedAt)?.getTime() ?? 0;
+      if (tNew > tOld) gwFixtures.set(p.fixtureId, p); // newer settled wins
     }
   }
+  // Sort by real completion order from server (completed_at DESC), not by GW
+  // number. This fixes non-linear leagues (Brazil) where matchday N+1 can
+  // complete before matchday N due to postponements.
+  byGW.sort((a, b) => {
+    const ra = roundCompletionRank.get(a) ?? 999;
+    const rb = roundCompletionRank.get(b) ?? 999;
+    return ra - rb; // lower rank = more recently completed = shown first
+  });
 
-  // Strip unsettled rows from every GW; hide GWs with nothing remaining.
-  for (const gw of byGW) {
-    gwMap.set(gw, gwMap.get(gw).filter(p => p.result));
+  // Flatten fixture maps back to arrays and drop GWs with no settled entries.
+  for (const gw of [...byGW]) {
+    const rows = [...gwMap.get(gw).values()].filter(p => p.result);
+    if (rows.length === 0) byGW.splice(byGW.indexOf(gw), 1);
+    else gwMap.set(gw, rows);
   }
-  const filtered = byGW.filter(gw => gwMap.get(gw).length > 0);
-  byGW.length = 0;
-  filtered.forEach(gw => byGW.push(gw));
 
-  // If the current GW has no settled results yet, use live predictions so History
-  // stays consistent with the Fixtures tab.
-  const currentGWSettled = byGW[0] === maxGW;
-  const showLiveFallback = !currentGWSettled && liveGW;
-
+  // ── Live-fallback view: current GW not yet complete ───────────────────────────
   if (showLiveFallback) {
     if (liveLoading) return <div className="loading-card" style={{ padding: 20 }}><div className="spinner" /></div>;
 
-    // PL uses the bulk gameweek endpoint; FD uses per-fixture parallel fetches
     const rawLive = isPL
       ? (livePredData ?? []).map(f => ({
           fixtureId:  f.fixtureId,
@@ -465,39 +549,85 @@ function TrackerHistory({ leagueId }) {
         }))
       : (fdLiveData ?? []);
 
-    const liveRows = rawLive.sort((a, b) => {
+    const liveRows = [...rawLive].sort((a, b) => {
       const da = safeDate(a.kickoff), db = safeDate(b.kickoff);
       return da && db ? da - db : 0;
     });
+
+    // Build gwMap for completed rounds so the dropdown works alongside live view
+    const liveByGW  = [];
+    const liveGwMap = new Map();
+    for (const p of all) {
+      const gw = p.gameweek ?? 0;
+      if (!gw || (isPL && gw === 1) || !completedSet.has(gw)) continue;
+      if (!liveGwMap.has(gw)) { liveGwMap.set(gw, []); liveByGW.push(gw); }
+      liveGwMap.get(gw).push(p);
+    }
+    liveByGW.sort((a, b) => {
+      const ra = roundCompletionRank.get(a) ?? 999;
+      const rb = roundCompletionRank.get(b) ?? 999;
+      return ra - rb;
+    });
+
+    const activeLiveGW = selectedGW && completedSet.has(selectedGW) ? selectedGW : null;
+    const historyRows  = activeLiveGW ? (liveGwMap.get(activeLiveGW) ?? []) : null;
 
     return (
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <div className="card-title" style={{ margin: 0 }}>History</div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            {gwLabel} {maxGW} · live predictions
+            {activeLiveGW ? null : `${gwLabel} ${liveGW} · live predictions`}
           </div>
         </div>
-        {liveRows.length === 0 ? (
-          <div className="text-muted fs-13" style={{ padding: '8px 0' }}>
-            No predictions available yet.
-          </div>
+
+        {liveByGW.length > 0 && (
+          <select
+            value={activeLiveGW ?? ''}
+            onChange={e => setSelectedGW(e.target.value ? Number(e.target.value) : null)}
+            style={{
+              width: '100%', marginBottom: 16, padding: '8px 12px',
+              borderRadius: 8, border: '1px solid var(--border)',
+              background: 'var(--surface2)', color: 'var(--text)',
+              fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+              cursor: 'pointer', appearance: 'none',
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`,
+              backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center', paddingRight: 32,
+            }}
+          >
+            <option value="">{gwLabel} {liveGW} · live predictions</option>
+            {liveByGW.map(gw => (
+              <option key={gw} value={gw}>
+                {gwLabel} {gw} — {liveGwMap.get(gw).length} games
+              </option>
+            ))}
+          </select>
+        )}
+
+        {historyRows ? (
+          historyRows.length === 0
+            ? <div className="text-muted fs-13" style={{ padding: '8px 0' }}>No results found.</div>
+            : historyRows.map((p, i) => <PredictionRow key={p.fixtureId ?? `${activeLiveGW}-${i}`} p={p} />)
         ) : (
-          liveRows.map((p, i) => <PredictionRow key={p.fixtureId ?? i} p={p} />)
+          liveRows.length === 0
+            ? <div className="text-muted fs-13" style={{ padding: '8px 0' }}>No predictions available yet.</div>
+            : liveRows.map((p, i) => <PredictionRow key={p.fixtureId ?? i} p={p} />)
         )}
       </div>
     );
   }
 
+  // ── No completed GWs yet ───────────────────────────────────────────────────────
   if (!byGW.length) return (
     <div className="card">
       <div className="card-title">History</div>
       <div className="text-muted fs-13" style={{ padding: '8px 0' }}>
-        No predictions tracked yet — auto-saved whenever a fixture is loaded.
+        No completed gameweeks yet — results appear here once a full round is settled.
       </div>
     </div>
   );
 
+  // Sort each GW's rows by kickoff ascending
   for (const gw of byGW) {
     gwMap.get(gw).sort((a, b) => {
       const da = safeDate(a.kickoff), db = safeDate(b.kickoff);
@@ -508,33 +638,17 @@ function TrackerHistory({ leagueId }) {
     });
   }
 
-  // Find the gameweek in history whose median kickoff is closest to now.
-  // This works even when the server's currentGW isn't in gwMap yet (no predictions
-  // saved for that week) — we pick the closest week we DO have predictions for.
-  const now = Date.now();
-  let bestGW = byGW[0];
-  let bestDist = Infinity;
-  for (const gw of byGW) {
-    const times = gwMap.get(gw)
-      .map(p => safeDate(p.kickoff)?.getTime())
-      .filter(Boolean);
-    if (!times.length) continue;
-    times.sort((a, b) => a - b);
-    const median = times[Math.floor(times.length / 2)];
-    const dist   = Math.abs(median - now);
-    if (dist < bestDist) { bestDist = dist; bestGW = gw; }
-  }
+  // Default to the most-recently-completed GW (byGW[0] is the highest, since sorted desc).
+  // Prefer the server's currentGW if it is in the completed list.
+  const defaultGW = serverGW && completedSet.has(serverGW) ? serverGW : byGW[0];
+  const activeGW  = (selectedGW && completedSet.has(selectedGW)) ? selectedGW : defaultGW;
+  const rows      = gwMap.get(activeGW) ?? [];
 
-  // Prefer server's currentGW only if it survived the settled filter, otherwise date-based pick
-  const currentGW = serverGW && byGW.includes(serverGW) ? serverGW : bestGW;
-  const activeGW = selectedGW ?? currentGW;
-  const rows = gwMap.get(activeGW) ?? [];
-
-  const gwCompleted = rows.filter(p => p.result);
-  const gwExact     = gwCompleted.filter(p => classifyPrediction(p) === 'exact').length;
-  const gwCorrect   = gwCompleted.filter(p => classifyPrediction(p) === 'correct').length;
-  const gwWrong     = gwCompleted.filter(p => classifyPrediction(p) === 'wrong').length;
-  const gwAccuracy  = gwCompleted.length ? Math.round((gwExact + gwCorrect) / gwCompleted.length * 100) : null;
+  // All rows are settled (gwMap only holds completed GWs) — classify directly.
+  const gwExact   = rows.filter(p => classifyPrediction(p) === 'exact').length;
+  const gwCorrect = rows.filter(p => classifyPrediction(p) === 'correct').length;
+  const gwWrong   = rows.filter(p => classifyPrediction(p) === 'wrong').length;
+  const gwAccuracy = rows.length ? Math.round((gwExact + gwCorrect) / rows.length * 100) : null;
 
   return (
     <div className="card">
@@ -552,30 +666,20 @@ function TrackerHistory({ leagueId }) {
         value={activeGW}
         onChange={e => setSelectedGW(Number(e.target.value))}
         style={{
-          width: '100%',
-          marginBottom: 16,
-          padding: '8px 12px',
-          borderRadius: 8,
-          border: '1px solid var(--border)',
-          background: 'var(--surface2)',
-          color: 'var(--text)',
-          fontSize: 13,
-          fontWeight: 600,
-          fontFamily: 'inherit',
-          cursor: 'pointer',
-          appearance: 'none',
+          width: '100%', marginBottom: 16, padding: '8px 12px',
+          borderRadius: 8, border: '1px solid var(--border)',
+          background: 'var(--surface2)', color: 'var(--text)',
+          fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+          cursor: 'pointer', appearance: 'none',
           backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`,
-          backgroundRepeat: 'no-repeat',
-          backgroundPosition: 'right 12px center',
-          paddingRight: 32,
+          backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center', paddingRight: 32,
         }}
       >
         {byGW.map(gw => {
           const gwRows = gwMap.get(gw);
-          const settled = gwRows.filter(p => p.result).length;
           return (
             <option key={gw} value={gw}>
-              {gw === 0 ? `Unknown ${gwLabel}` : `${gwLabel} ${gw}`} — {settled}/{gwRows.length} settled
+              {gwLabel} {gw} — {gwRows.length} games
             </option>
           );
         })}
@@ -606,13 +710,7 @@ export default function Stats() {
         </button>
       </div>
 
-      {/* Analytics tabs — shared by all leagues */}
-      {tab === 'accuracy' && (
-        <>
-          <AccuracyCard    leagueId={leagueId} />
-          <CalibrationCard leagueId={leagueId} />
-        </>
-      )}
+      {tab === 'accuracy' && <AccuracyCard leagueId={leagueId} />}
       {tab === 'tracker' && <TrackerHistory leagueId={leagueId} />}
     </div>
   );

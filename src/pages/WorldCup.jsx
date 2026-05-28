@@ -1575,6 +1575,260 @@ function InsightsView({ data, onTeamClick }) {
   );
 }
 
+// ─── WCStatsView ─────────────────────────────────────────────────────────────
+// Stats tab: day-by-day schedule with predictions + accuracy once games play.
+function WCStatsView({ data }) {
+  const { wcSchedule = [], groupMatchPredictions = {}, groupFixtures = [], knockoutFixtures = [] } = data;
+
+  // Build prediction lookup: "home|away" → prediction object
+  const predMap = {};
+  for (const preds of Object.values(groupMatchPredictions)) {
+    for (const p of preds) predMap[`${p.home}|${p.away}`] = p;
+  }
+
+  // Resolve prediction for a schedule entry — tries forward then reversed
+  const getPred = (home, away) => {
+    const fwd = predMap[`${home}|${away}`];
+    if (fwd) return { pred: fwd, reversed: false };
+    const rev = predMap[`${away}|${home}`];
+    if (rev) {
+      // Flip score and swap win probabilities
+      const [rh, ra] = (rev.predictedScore ?? '0-0').split('-');
+      return {
+        pred: {
+          ...rev,
+          predictedScore: `${ra}-${rh}`,
+          homeWin: rev.awayWin,
+          awayWin: rev.homeWin,
+        },
+        reversed: true,
+      };
+    }
+    return { pred: null, reversed: false };
+  };
+
+  // Build results lookup from played fixtures
+  const resultsMap = {};
+  for (const f of [...groupFixtures, ...knockoutFixtures]) {
+    const home   = f.teams?.home?.name;
+    const away   = f.teams?.away?.name;
+    const status = f._statusShort ?? f.fixture?.status?.short ?? 'NS';
+    if (['FT','AET','PEN'].includes(status) && home && away) {
+      resultsMap[`${home}|${away}`] = { hGoals: f.goals?.home, aGoals: f.goals?.away };
+    }
+  }
+
+  // Group schedule by date
+  const byDate = {};
+  for (const m of wcSchedule) {
+    const date = m.kickoff.slice(0, 10);
+    if (!byDate[date]) byDate[date] = [];
+    byDate[date].push(m);
+  }
+  const dates = Object.keys(byDate).sort();
+
+  // Default to closest day to today
+  const today = Date.now();
+  const defaultDate = dates.reduce((best, d) => {
+    const dist = Math.abs(new Date(d).getTime() - today);
+    return dist < Math.abs(new Date(best).getTime() - today) ? d : best;
+  }, dates[0] ?? '');
+
+  const [selectedDate, setSelectedDate] = useState(defaultDate);
+  const matches = byDate[selectedDate] ?? [];
+
+  const fmtDay = (iso) => {
+    const d = new Date(iso + 'T12:00:00Z');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  };
+  const fmtTime = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' });
+  };
+
+  const hasResults = Object.keys(resultsMap).length > 0;
+
+  const shortName = (name) => {
+    const overrides = {
+      'United States': 'USA', 'South Korea': 'S. Korea', 'Saudi Arabia': 'S. Arabia',
+      'South Africa': 'S. Africa', 'Bosnia & Herzegovina': 'Bosnia', 'New Zealand': 'NZ',
+      "Côte d'Ivoire": 'C. d\'Ivoire', 'Czech Republic': 'Czechia',
+    };
+    return overrides[name] ?? (name.length > 11 ? name.split(' ').map(w => w[0]).join('.') : name);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+      {/* Accuracy summary — shown once games start */}
+      {hasResults && <AccuracyView data={data} />}
+
+      {/* Day dropdown */}
+      {dates.length > 0 && (
+        <select
+          value={selectedDate}
+          onChange={e => setSelectedDate(e.target.value)}
+          style={{
+            width: '100%', padding: '10px 14px',
+            borderRadius: 10, border: '1px solid var(--border)',
+            background: 'var(--surface2)', color: 'var(--text)',
+            fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
+            cursor: 'pointer', appearance: 'none',
+            backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`,
+            backgroundRepeat: 'no-repeat', backgroundPosition: 'right 14px center', paddingRight: 36,
+          }}
+        >
+          {dates.map((d, i) => (
+            <option key={d} value={d}>Day {i + 1} · {fmtDay(d)} · {byDate[d].length} game{byDate[d].length !== 1 ? 's' : ''}</option>
+          ))}
+        </select>
+      )}
+
+      {/* Game cards */}
+      {matches.map((m, i) => {
+        const { pred } = getPred(m.home, m.away);
+        const result = resultsMap[`${m.home}|${m.away}`];
+        const [ph, pa] = (pred?.predictedScore ?? '0-0').split('-').map(Number);
+        const groupColor = GROUP_COLORS[m.group] ?? 'var(--gold)';
+
+        let badge = null;
+        if (result) {
+          const { hGoals, aGoals } = result;
+          if (ph === hGoals && pa === aGoals) {
+            badge = { label: '🎯 Exact score', color: '#10b981' };
+          } else {
+            const predWin = ph > pa ? 'H' : ph < pa ? 'A' : 'D';
+            const realWin = hGoals > aGoals ? 'H' : hGoals < aGoals ? 'A' : 'D';
+            badge = predWin === realWin
+              ? { label: '✓ Result correct', color: '#3b82f6' }
+              : { label: '✗ Wrong',          color: '#ef4444' };
+          }
+        }
+
+        const hw = pred ? Math.round(pred.homeWin * 100) : null;
+        const dw = pred ? Math.round(pred.draw * 100)    : null;
+        const aw = pred ? Math.round(pred.awayWin * 100) : null;
+
+        return (
+          <div key={i} style={{
+            background: 'var(--surface2)',
+            borderRadius: 12,
+            border: `1px solid var(--border)`,
+            overflow: 'hidden',
+          }}>
+            {/* Header strip */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '7px 12px',
+              background: `${groupColor}12`,
+              borderBottom: `1px solid ${groupColor}30`,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{
+                  width: 18, height: 18, borderRadius: 4,
+                  background: `${groupColor}22`, border: `1.5px solid ${groupColor}66`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontFamily: 'Bebas Neue, sans-serif', fontSize: 11, color: groupColor,
+                }}>
+                  {m.group}
+                </div>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>
+                  {m.venue}, {m.city}
+                </span>
+              </div>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>
+                {fmtTime(m.kickoff)}
+              </span>
+            </div>
+
+            {/* Teams + score */}
+            <div style={{ display: 'flex', alignItems: 'center', padding: '14px 14px 10px' }}>
+              {/* Home */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3 }}>
+                <span style={{ fontSize: 22 }}>{flag(m.home)}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
+                  {shortName(m.home)}
+                </span>
+                {hw !== null && (
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>{hw}%</span>
+                )}
+              </div>
+
+              {/* Score centre */}
+              <div style={{ textAlign: 'center', padding: '0 10px' }}>
+                {result ? (
+                  <>
+                    <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 28, color: 'var(--text-primary)', letterSpacing: 2, lineHeight: 1 }}>
+                      {result.hGoals} – {result.aGoals}
+                    </div>
+                    <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3 }}>pred {pred?.predictedScore ?? '?-?'}</div>
+                    {badge && (
+                      <div style={{ marginTop: 5 }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, color: badge.color,
+                          background: `${badge.color}18`, border: `1px solid ${badge.color}44`,
+                          borderRadius: 4, padding: '2px 7px',
+                        }}>{badge.label}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontFamily: 'Bebas Neue, sans-serif', fontSize: 24, color: 'var(--gold)', letterSpacing: 2, lineHeight: 1 }}>
+                      {pred?.predictedScore?.replace('-', ' – ') ?? '? – ?'}
+                    </div>
+                    <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 3, fontWeight: 600, letterSpacing: 0.5 }}>PREDICTED</div>
+                  </>
+                )}
+              </div>
+
+              {/* Away */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+                <span style={{ fontSize: 22 }}>{flag(m.away)}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2, textAlign: 'right' }}>
+                  {shortName(m.away)}
+                </span>
+                {aw !== null && (
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600 }}>{aw}%</span>
+                )}
+              </div>
+            </div>
+
+            {/* Win probability bar */}
+            {hw !== null && (
+              <div style={{ padding: '0 14px 12px' }}>
+                <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', gap: 1 }}>
+                  <div style={{ width: `${hw}%`, background: '#3b82f6', borderRadius: '3px 0 0 3px' }} />
+                  <div style={{ width: `${dw}%`, background: 'rgba(255,255,255,0.15)' }} />
+                  <div style={{ width: `${aw}%`, background: '#ef4444', borderRadius: '0 3px 3px 0' }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 9, color: 'var(--text-muted)' }}>
+                  <span style={{ color: '#3b82f6', fontWeight: 700 }}>{hw}% win</span>
+                  <span>{dw}% draw</span>
+                  <span style={{ color: '#ef4444', fontWeight: 700 }}>{aw}% win</span>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {matches.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>
+          No games on this day.
+        </div>
+      )}
+
+      {!hasResults && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', textAlign: 'center', fontStyle: 'italic' }}>
+          Accuracy stats will appear here once matches kick off on{' '}
+          <span style={{ color: 'var(--gold)' }}>June 11, 2026</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── AccuracyView ────────────────────────────────────────────────────────────
 // Compares every pre-tournament prediction against the actual result once played.
 // Shows aggregate stats + per-group advancement accuracy.
@@ -2685,6 +2939,7 @@ export default function WorldCup() {
           { id: 'insights', label: 'Insights' },
           { id: 'odds',     label: '🏆 Odds' },
           { id: 'rankings', label: '📈 Rankings' },
+          { id: 'accuracy', label: '📊 Stats' },
         ]).map(({ id, label, disabled }) => (
           <button
             key={id}
@@ -2721,12 +2976,14 @@ export default function WorldCup() {
         <InsightsView data={dataFallback} onTeamClick={setSelectedTeam} />
       ) : !hasApiData && view === 'odds' ? (
         <WinnerOddsView data={dataFallback} boostedReach={boostedReach} boosts={boosts} toggleBoost={toggleBoost} onTeamClick={setSelectedTeam} />
+      ) : !hasApiData && view === 'accuracy' ? (
+        <WCStatsView data={dataFallback} />
       ) : !hasApiData ? (
         <PreTournamentView data={dataPreTournament} onTeamClick={setSelectedTeam} />
       ) : view === 'groups' ? (
         <GroupStageView data={data} />
       ) : view === 'accuracy' ? (
-        <AccuracyView data={data} />
+        <WCStatsView data={data} />
       ) : (
         <KnockoutView data={data} />
       )}

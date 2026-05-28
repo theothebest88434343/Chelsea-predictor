@@ -231,12 +231,22 @@ function FdRound({ leagueId }) {
 
   const defaultMD = useMemo(() => {
     if (!allMatches || !matchdays.length) return null;
-    // Most recent matchday with at least one finished match
-    const finished = allMatches.filter(m => m.finished);
-    if (finished.length) {
-      return Math.max(...finished.map(m => m.matchday));
+    // Choose the matchday whose median kickoff is closest to now.
+    // Math.max would break irregular leagues (e.g. Brasileirão) where a later
+    // matchday with one played game overrides a more-current earlier round.
+    const now = Date.now();
+    let closest = Infinity, bestMd = null;
+    for (const md of matchdays) {
+      const times = allMatches
+        .filter(m => m.matchday === md && m.kickoffTime)
+        .map(m => new Date(m.kickoffTime).getTime())
+        .sort((a, b) => a - b);
+      if (!times.length) continue;
+      const median = times[Math.floor(times.length / 2)];
+      const dist   = Math.abs(median - now);
+      if (dist < closest) { closest = dist; bestMd = md; }
     }
-    return matchdays[0];
+    return bestMd ?? matchdays[0];
   }, [allMatches, matchdays]);
 
   const activeMD = selectedMD ?? defaultMD;
@@ -327,6 +337,7 @@ export default function Round() {
     const isCurrent = seasons.find(s => s.season === selectedSeason)?.isCurrent;
     if (isCurrent) {
       if (currentGW !== null && selectedGW === null) setSelectedGW(currentGW);
+      else if (currentGW === null && selectedGW === null) setSelectedGW(38); // end of season fallback
     } else {
       if (selectedGW === null) setSelectedGW(38);
     }
@@ -345,11 +356,12 @@ export default function Round() {
     setSelectedGW(null); // reset GW so it re-defaults for the new season
   };
 
+  // All leagues use FdRound for consistency.
+  return <FdRound leagueId={leagueId} />;
+
   if (!seasons.length || (isCurrent && activeGW === null)) {
     return <div className="loading-card"><div className="spinner" /><div>Loading…</div></div>;
   }
-
-  if (leagueId !== 'premier-league') return <FdRound leagueId={leagueId} />;
 
   return (
     <div>
